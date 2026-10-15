@@ -1,0 +1,24 @@
+# Copy this template to .github/workflows/checks.yml to enable GitHub Actions.
+name: Source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile Python sources
+        run: python -m compileall -q blender_maya scripts tests
+      - name: Build distributable add-on
+        run: python scripts/build_addon.py
+      - name: Verify archive contents
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

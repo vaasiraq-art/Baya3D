@@ -1,0 +1,23 @@
+name: Feature or workflow request
+description: Suggest a focused improvement and its artist workflow
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Artist task and current difficulty
+      description: Describe a concrete action and the mode/editor used.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include public references for parity requests and a Blender equivalent if known.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives, conflicts and limitations
+      description: Which existing keys or workflows could this affect?

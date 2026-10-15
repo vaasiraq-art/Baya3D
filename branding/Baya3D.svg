@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Baya 3D">
+  <defs>
+    <linearGradient id="tile" x2="1" y2="1"><stop stop-color="#29343b"/><stop offset="1" stop-color="#121a20"/></linearGradient>
+    <linearGradient id="front" x2="0.8" y2="1"><stop stop-color="#a5ffe2"/><stop offset="1" stop-color="#43c3ac"/></linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="50" fill="url(#tile)" stroke="#43545b" stroke-width="2"/>
+  <path fill="#176f70" d="M76 54h79l36 32v37l-17 17 22 21v38l-35 29H76z"/>
+  <path fill="url(#front)" fill-rule="evenodd" d="M62 40h79l36 32v37l-17 17 22 21v38l-35 29H62zm33 32v39h38l12-12V84l-14-12zm0 71v39h42l12-11v-15l-14-13z"/>
+  <path fill="#d1fff1" d="M62 40h79l36 32-14 11-31-27H76v144l-14 14z" opacity=".35"/>
+  <path fill="#30958c" d="m147 214 35-29 14 14-35 29H76l-14-14z"/>
+</svg>

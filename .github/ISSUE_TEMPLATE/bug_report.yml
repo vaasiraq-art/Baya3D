@@ -1,0 +1,36 @@
+name: Bug report
+description: Report reproducible behavior in Baya 3D
+labels: [bug]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Blender build, OS and Baya revision
+      placeholder: Full Blender version/build hash, operating system, commit
+    validations:
+      required: true
+  - type: input
+    id: context
+    attributes:
+      label: Keymap, keyboard layout, mode and focused editor
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Use a minimal synthetic scene. Remove private paths and project details.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
