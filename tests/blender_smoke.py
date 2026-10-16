@@ -142,18 +142,20 @@ def check_maya_workflow_and_coordinates():
         require(scene.tool_settings.use_snap and "INCREMENT" in scene.tool_settings.snap_elements, "Grid snap not set")
         require("FINISHED" in bpy.ops.maya_style.snap_hold(mode="GRID", toggle=True), "Grid snap untoggle failed")
 
-        # 6. Shader Assignment & Display Layers
-        for shader in ("STANDARD_SURFACE", "LAMBERT", "BLINN", "PHONG", "SURFACE_SHADER"):
+        # 6. Shader Assignment (including Maya 2027 OpenPBR Surface) & Display Layers
+        for shader in ("OPENPBR_SURFACE", "STANDARD_SURFACE", "LAMBERT", "BLINN", "PHONG", "SURFACE_SHADER"):
             require("FINISHED" in bpy.ops.maya_style.assign_shader(shader_type=shader), f"Shader {shader} failed")
         require(obj.active_material is not None, "Active material not assigned")
         require("FINISHED" in bpy.ops.maya_style.layer_create(name="props_layer"), "Layer creation failed")
         require("props_layer" in bpy.data.collections, "Display layer collection not created")
 
-        # 7. Menu Sets, Shelves & MEL Command Line Execution
-        for shelf_id in ("CURVES", "MODEL", "SCULPT", "UV", "RIG", "ANIM", "FX", "RENDER"):
+        # 7. Menu Sets, Shelves (including MASH & XGen) & MEL Command Line Execution
+        for shelf_id in ("CURVES", "MODEL", "SCULPT", "UV", "RIG", "ANIM", "FX", "RENDER", "MASH", "XGEN"):
             require("FINISHED" in bpy.ops.maya_style.shelf(name=shelf_id), f"Shelf {shelf_id} switch failed")
-        for mel_cmd in ("polySphere", "CenterPivot", "FreezeTransformations", "DeleteHistory"):
+        for mel_cmd in ("polySphere", "openPBRSurface", "MASHnewNetwork", "CenterPivot", "FreezeTransformations", "DeleteHistory", "sweepMesh"):
             require("FINISHED" in bpy.ops.maya_style.command_exec(command=mel_cmd, language="MEL"), f"MEL {mel_cmd} failed")
+        require(bpy.context.active_object.type == "CURVE" and math.isclose(bpy.context.active_object.data.bevel_depth, 0.15, abs_tol=1e-4),
+                "Sweep Mesh did not configure curve profile bevel_depth=0.15")
 
 
 bpy.utils.keyconfig_init()

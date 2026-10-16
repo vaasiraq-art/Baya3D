@@ -104,14 +104,16 @@ class MAYA_STYLE_PG_workspace(bpy.types.PropertyGroup):
         name='Shelf',
         description='Active Maya-style Tool Shelf',
         items=[
-            ('CURVES', 'Curves', 'NURBS and Bezier curve creation and editing tools', 'CURVE_BEZCURVE', 0),
+            ('CURVES', 'Curves', 'NURBS, Bezier curves and Sweep Mesh tools', 'CURVE_BEZCURVE', 0),
             ('MODEL', 'Polygons', 'Create and edit polygon meshes', 'MESH_CUBE', 1),
-            ('SCULPT', 'Sculpting', 'Sculpt brushes, remesh and subdivision tools', 'SCULPTMODE_HLT', 2),
+            ('SCULPT', 'Sculpting', 'Sculpt brushes, remesh and retopology tools', 'SCULPTMODE_HLT', 2),
             ('UV', 'UV Editing', 'UV projection, seam, unwrap and layout tools', 'UV', 3),
             ('RIG', 'Rigging', 'Joints, skin binding, parenting and constraints', 'ARMATURE_DATA', 4),
             ('ANIM', 'Animation', 'Keyframes, breakdown keys and animation editors', 'ANIM', 5),
-            ('RENDER', 'Rendering', 'Shaders, lights, cameras and rendering', 'SHADING_RENDERED', 6),
+            ('RENDER', 'Rendering', 'OpenPBR, Standard Surface, lights, cameras and rendering', 'SHADING_RENDERED', 6),
             ('FX', 'FX', 'Procedural geometry nodes, cloth and physics', 'MOD_PHYSICS', 7),
+            ('MASH', 'MASH', 'Maya 2027 MASH procedural instancing and motion graphics', 'MOD_ARRAY', 8),
+            ('XGEN', 'XGen', 'Maya 2027 XGen interactive hair and groom curves', 'CURVES', 9),
         ],
         default='MODEL',
     )
@@ -227,6 +229,8 @@ class MAYA_STYLE_OT_shelf(bpy.types.Operator):
         ('ANIM', 'Animation'),
         ('FX', 'FX'),
         ('RENDER', 'Rendering'),
+        ('MASH', 'MASH'),
+        ('XGEN', 'XGen'),
     ]])
 
     def execute(self, context):
@@ -241,6 +245,8 @@ class MAYA_STYLE_OT_shelf(bpy.types.Operator):
             'ANIM': 'ANIMATION',
             'FX': 'FX',
             'RENDER': 'RENDERING',
+            'MASH': 'FX',
+            'XGEN': 'FX',
         }
         if self.name in menu_map:
             ms.menu_set = menu_map[self.name]
@@ -402,6 +408,7 @@ class MAYA_STYLE_MT_shelf_create(bpy.types.Menu):
         col.operator('curve.primitive_bezier_circle_add', text='Bezier Circle', icon='CURVE_BEZCIRCLE')
         col.operator('curve.primitive_nurbs_curve_add', text='NURBS Curve', icon='CURVE_NCURVE')
         col.operator('curve.primitive_nurbs_circle_add', text='NURBS Circle', icon='CURVE_NCIRCLE')
+        col.operator('maya_style.poly_action', text='Sweep Mesh (Curve Profile)', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
         col.operator('surface.primitive_nurbs_surface_sphere_add', text='NURBS Sphere', icon='SURFACE_NSPHERE')
         col.operator('surface.primitive_nurbs_surface_cylinder_add', text='NURBS Cylinder', icon='SURFACE_NCYLINDER')
         col.separator()
@@ -560,6 +567,7 @@ class MAYA_STYLE_MT_mesh_menu(bpy.types.Menu):
         lay.separator()
         lay.operator('maya_style.poly_action', text='Reduce (Decimate)', icon='MOD_DECIM').action = 'REDUCE'
         lay.operator('maya_style.poly_action', text='Remesh (Voxel)', icon='MOD_REMESH').action = 'REMESH'
+        lay.operator('maya_style.poly_action', text='Retopologize (Quad)', icon='MESH_GRID').action = 'RETOPO_MESH'
 
 
 class MAYA_STYLE_MT_mesh(bpy.types.Menu):
@@ -634,6 +642,7 @@ class MAYA_STYLE_MT_curves(bpy.types.Menu):
         lay.operator('curve.primitive_bezier_circle_add', text='Bezier Circle', icon='CURVE_BEZCIRCLE')
         lay.operator('curve.primitive_nurbs_circle_add', text='NURBS Circle', icon='CURVE_NCIRCLE')
         lay.separator()
+        lay.operator('maya_style.poly_action', text='Sweep Mesh (Curve Profile)', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
         lay.operator('object.convert', text='Convert Curve to Mesh', icon='MESH_DATA').target = 'MESH'
         lay.operator('object.convert', text='Convert Mesh Edge to Curve', icon='CURVE_DATA').target = 'CURVE'
 
@@ -770,6 +779,9 @@ class MAYA_STYLE_MT_fx_menu(bpy.types.Menu):
 
     def draw(self, context):
         lay = self.layout
+        lay.operator('maya_style.poly_action', text='Create MASH Network', icon='MOD_ARRAY').action = 'MASH_NETWORK'
+        lay.operator('maya_style.poly_action', text='Create XGen Interactive Groom', icon='CURVES').action = 'XGEN_GROOM'
+        lay.separator()
         lay.operator('object.modifier_add', text='Bifrost / Geometry Nodes Graph', icon='GEOMETRY_NODES').type = 'NODES'
         lay.operator('object.modifier_add', text='nCloth (Cloth Simulation)', icon='MOD_CLOTH').type = 'CLOTH'
         lay.operator('object.modifier_add', text='Passive Collider (Collision)', icon='MOD_PHYSICS').type = 'COLLISION'
@@ -784,8 +796,9 @@ class MAYA_STYLE_MT_shading_menu(bpy.types.Menu):
 
     def draw(self, context):
         lay = self.layout
-        lay.label(text='Assign New Material', icon='MATERIAL')
+        lay.label(text='Assign New Material (Maya 2027)', icon='MATERIAL')
         for preset, label in [
+            ('OPENPBR_SURFACE', 'OpenPBR Surface (Maya 2027)'),
             ('STANDARD_SURFACE', 'Standard Surface'),
             ('LAMBERT', 'Lambert (Matte)'),
             ('BLINN', 'Blinn'),
@@ -972,6 +985,7 @@ def draw_shelf(self, context):
         row.operator('curve.primitive_bezier_curve_add', text='EP Curve', icon='CURVE_BEZCURVE')
         row.operator('curve.primitive_nurbs_curve_add', text='CV Curve', icon='CURVE_NCURVE')
         row.operator('curve.primitive_bezier_circle_add', text='Circle', icon='CURVE_BEZCIRCLE')
+        row.operator('maya_style.poly_action', text='Sweep Mesh', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
         row.operator('surface.primitive_nurbs_surface_sphere_add', text='Sphere', icon='SURFACE_NSPHERE')
         row.operator('surface.primitive_nurbs_surface_cylinder_add', text='Cylinder', icon='SURFACE_NCYLINDER')
         row.separator()
@@ -995,6 +1009,7 @@ def draw_shelf(self, context):
             row.operator('maya_style.poly_action', text='Smooth', icon='MOD_SUBSURF').action = 'SMOOTH_MESH'
             row.operator('maya_style.poly_action', text='Bool -', icon='MOD_BOOLEAN').action = 'BOOLEAN_DIFFERENCE'
             row.operator('maya_style.poly_action', text='Mirror', icon='MOD_MIRROR').action = 'MIRROR_X'
+            row.operator('maya_style.poly_action', text='Retopo', icon='MESH_GRID').action = 'RETOPO_MESH'
             row.operator('maya_style.component', text='Edit', icon='EDITMODE_HLT').mode = 'FACE'
     elif shelf == 'SCULPT':
         workspace_button(row, 'Sculpting', 'Sculpt Mode', 'SCULPTMODE_HLT')
@@ -1002,6 +1017,7 @@ def draw_shelf(self, context):
         row.operator('object.modifier_add', text='Subdiv', icon='MOD_SUBSURF').type = 'SUBSURF'
         row.operator('object.modifier_add', text='Multires', icon='MOD_MULTIRES').type = 'MULTIRES'
         row.operator('maya_style.poly_action', text='Voxel Remesh', icon='MOD_REMESH').action = 'REMESH'
+        row.operator('maya_style.poly_action', text='Retopo', icon='MESH_GRID').action = 'RETOPO_MESH'
         row.operator('maya_style.poly_action', text='Decimate', icon='MOD_DECIM').action = 'REDUCE'
     elif shelf == 'UV':
         workspace_button(row, 'UV Editing', 'UV Editor', 'UV')
@@ -1030,6 +1046,7 @@ def draw_shelf(self, context):
         workspace_button(row, 'Animation', 'Graph Editor', 'GRAPH')
         row.operator('render.opengl', text='Playblast', icon='RENDER_ANIMATION').animation = True
     elif shelf == 'RENDER':
+        row.operator('maya_style.assign_shader', text='OpenPBR', icon='SHADING_RENDERED').shader_type = 'OPENPBR_SURFACE'
         row.operator('maya_style.assign_shader', text='Std Surface', icon='MATERIAL').shader_type = 'STANDARD_SURFACE'
         row.operator('maya_style.assign_shader', text='Lambert', icon='SHADING_SOLID').shader_type = 'LAMBERT'
         row.operator('maya_style.assign_shader', text='Blinn', icon='SHADING_RENDERED').shader_type = 'BLINN'
@@ -1041,8 +1058,23 @@ def draw_shelf(self, context):
         row.separator()
         workspace_button(row, 'Materials', 'Hypershade', 'NODE_MATERIAL')
         row.operator('render.render', text='Render', icon='RENDER_STILL')
+    elif shelf == 'MASH':
+        row.operator('maya_style.poly_action', text='Create MASH Network', icon='MOD_ARRAY').action = 'MASH_NETWORK'
+        row.operator('object.modifier_add', text='Distribute', icon='MOD_ARRAY').type = 'ARRAY'
+        row.operator('object.modifier_add', text='Wave / Offset', icon='MOD_WAVE').type = 'WAVE'
+        row.operator('object.modifier_add', text='Curve Warp', icon='MOD_CURVE').type = 'CURVE'
+        row.operator('object.text_add', text='3D Type', icon='FONT_DATA')
+        row.operator('maya_style.poly_action', text='Sweep Mesh', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
+        workspace_button(row, 'Procedural FX', 'Bifrost / Nodes', 'GEOMETRY_NODES')
+    elif shelf == 'XGEN':
+        row.operator('maya_style.poly_action', text='Create Groom', icon='CURVES').action = 'XGEN_GROOM'
+        row.operator('object.curves_empty_hair_add', text='Empty Hair', icon='CURVES_DATA')
+        row.operator('maya_style.poly_action', text='Sweep Strand', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
+        row.operator('object.convert', text='To Mesh', icon='MESH_DATA').target = 'MESH'
     else:
         workspace_button(row, 'Procedural FX', 'Bifrost / Nodes', 'GEOMETRY_NODES')
+        row.operator('maya_style.poly_action', text='MASH Network', icon='MOD_ARRAY').action = 'MASH_NETWORK'
+        row.operator('maya_style.poly_action', text='XGen Groom', icon='CURVES').action = 'XGEN_GROOM'
         row.operator('object.modifier_add', text='nCloth', icon='MOD_CLOTH').type = 'CLOTH'
         row.operator('object.modifier_add', text='Collider', icon='MOD_PHYSICS').type = 'COLLISION'
         row.operator('object.modifier_add', text='nParticles', icon='PARTICLES').type = 'PARTICLE_SYSTEM'
@@ -1183,7 +1215,14 @@ class MAYA_STYLE_PT_inputs(bpy.types.Panel):
         h_row.label(text='INPUTS', icon='MODIFIER')
         h_row.operator('maya_style.poly_action', text='Delete History', icon='MODIFIER_OFF').action = 'DELETE_HISTORY'
 
-        if not obj.modifiers:
+        if obj.type == 'CURVE' and obj.data:
+            sbox = lay.box()
+            sbox.label(text='sweepMeshCreator1', icon='OUTLINER_OB_CURVE')
+            sbox.prop(obj.data, 'bevel_depth', text='Scale Profile')
+            sbox.prop(obj.data, 'bevel_resolution', text='Precision / Sides')
+            sbox.prop(obj.data, 'use_fill_caps', text='Cap Ends')
+
+        if not obj.modifiers and obj.type != 'CURVE':
             lay.label(text='polySurface (Clean History)', icon='CHECKMARK')
         for mod in obj.modifiers:
             box = lay.box()
@@ -1204,6 +1243,17 @@ class MAYA_STYLE_PT_inputs(bpy.types.Panel):
             elif mod.type == 'ARRAY':
                 row = box.row(align=True)
                 row.prop(mod, 'count', text='Copies')
+            elif mod.type == 'WAVE':
+                row = box.row(align=True)
+                row.prop(mod, 'height', text='Amplitude')
+                row.prop(mod, 'width', text='Width')
+            elif mod.type == 'REMESH':
+                row = box.row(align=True)
+                row.prop(mod, 'voxel_size', text='Voxel Size')
+            elif mod.type == 'BOOLEAN':
+                row = box.row(align=True)
+                row.prop(mod, 'operation', text='')
+                row.prop(mod, 'object', text='')
             elif mod.type == 'DECIMATE':
                 row = box.row(align=True)
                 row.prop(mod, 'ratio', text='Ratio')
@@ -1263,6 +1313,9 @@ class MAYA_STYLE_PT_modeling_toolkit(bpy.types.Panel):
         r3 = m_box.row(align=True)
         r3.operator('maya_style.poly_action', text='Mirror X').action = 'MIRROR_X'
         r3.operator('maya_style.poly_action', text='Remesh').action = 'REMESH'
+        r4 = m_box.row(align=True)
+        r4.operator('maya_style.poly_action', text='Retopo (Quad)').action = 'RETOPO_MESH'
+        r4.operator('maya_style.poly_action', text='Sweep Mesh').action = 'SWEEP_MESH'
 
         # Component Operations
         c_box = lay.box()
@@ -1339,6 +1392,13 @@ class MAYA_STYLE_PT_attribute_editor(bpy.types.Panel):
                 for lvl in (1, 2, 3):
                     s_row.operator('maya_style.smooth_preview', text=str(lvl)).level = lvl
                 box.operator('maya_style.preview_divisions', text='+ Smooth Divisions').delta = 1
+            elif obj.type == 'CURVE':
+                box.label(text=f'Curve / Sweep Shape: {obj.data.name}', icon='OUTLINER_OB_CURVE')
+                box.prop(obj.data, 'bevel_depth', text='Sweep Profile Scale')
+                box.prop(obj.data, 'bevel_resolution', text='Profile Sides / Precision')
+                box.prop(obj.data, 'use_fill_caps', text='Cap Ends')
+                box.prop(obj.data, 'extrude', text='Flat Extrude')
+                box.operator('maya_style.poly_action', text='Reset / Enable Sweep Mesh', icon='OUTLINER_OB_CURVE').action = 'SWEEP_MESH'
             elif obj.type == 'CAMERA':
                 box.label(text=f'Camera Shape: {obj.data.name}', icon='CAMERA_DATA')
                 box.prop(obj.data, 'lens', text='Focal Length')
@@ -1354,7 +1414,7 @@ class MAYA_STYLE_PT_attribute_editor(bpy.types.Panel):
         elif tab == 'MATERIAL':
             box = lay.box()
             r = box.row(align=True)
-            for p, lbl in [('STANDARD_SURFACE', 'StdSurf'), ('LAMBERT', 'Lambert'), ('BLINN', 'Blinn'), ('PHONG', 'Phong')]:
+            for p, lbl in [('OPENPBR_SURFACE', 'OpenPBR'), ('STANDARD_SURFACE', 'StdSurf'), ('LAMBERT', 'Lambert'), ('BLINN', 'Blinn'), ('PHONG', 'Phong')]:
                 r.operator('maya_style.assign_shader', text=lbl).shader_type = p
             mat = obj.active_material
             if not mat:

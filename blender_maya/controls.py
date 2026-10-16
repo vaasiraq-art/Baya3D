@@ -527,6 +527,11 @@ class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
         ('REDUCE_MESH', "Reduce (Decimate)", "Add a Decimate modifier to reduce polygon count"),
         ('REDUCE', "Reduce (Decimate)", "Add a Decimate modifier to reduce polygon count"),
         ('REMESH', "Remesh", "Apply or add a Voxel Remesh modifier"),
+        ('RETOPO_MESH', "Retopologize (Quad)", "Reconstruct clean quad topology (Maya Retopologize)"),
+        ('RETOPO', "Retopologize (Quad)", "Reconstruct clean quad topology (Maya Retopologize)"),
+        ('SWEEP_MESH', "Sweep Mesh", "Create a procedural swept mesh along a curve (Maya Sweep Mesh)"),
+        ('MASH_NETWORK', "Create MASH Network", "Create a procedural MASH distribute/instancing modifier stack"),
+        ('XGEN_GROOM', "Create XGen Interactive Groom", "Create interactive hair curves on the selected mesh surface"),
         ('GROUP', "Group (Ctrl+G)", "Group selected objects under a new null/empty node"),
         ('UNGROUP', "Ungroup", "Unparent children of the selected group node, keeping transforms"),
         ('LOCATOR', "Create Locator", "Create a Maya-style Locator (Empty axes)"),
@@ -546,6 +551,7 @@ class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
         act = {
             'POKE': 'POKE_FACES',
             'REDUCE': 'REDUCE_MESH',
+            'RETOPO': 'RETOPO_MESH',
             'CONVERT_TO_VERTS': 'CONVERT_TO_VERTICES',
         }.get(self.action, self.action)
         if act == 'LOCATOR':
@@ -554,6 +560,25 @@ class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
             bpy.ops.object.empty_add(type='PLAIN_AXES')
             if context.active_object:
                 context.active_object.name = "locator1"
+            return {'FINISHED'}
+
+        if act == 'SWEEP_MESH':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            curves = [o for o in context.selected_editable_objects if o.type == 'CURVE']
+            if not curves:
+                bpy.ops.curve.primitive_bezier_curve_add()
+                if context.active_object and context.active_object.type == 'CURVE':
+                    context.active_object.name = "sweepCurve1"
+                    curves = [context.active_object]
+            for crv in curves:
+                cdata = crv.data
+                cdata.dimensions = '3D'
+                cdata.fill_mode = 'FULL'
+                cdata.bevel_depth = 0.15
+                cdata.bevel_resolution = 3  # 8-sided profile matching Maya sweepMeshCreator.profilePolySides=8
+                cdata.use_fill_caps = True
+                crv["baya_sweep_mesh"] = True
             return {'FINISHED'}
 
         if act == 'SOFT_SELECT_TOGGLE':
@@ -732,6 +757,45 @@ class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
             mod.voxel_size = 0.1
             return {'FINISHED'}
 
+        if act == 'RETOPO_MESH':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            try:
+                bpy.ops.object.quadriflow_remesh(target_faces=2000, use_mesh_symmetry=False, use_preserve_sharp=True)
+            except Exception:
+                mod = obj.modifiers.new(name="Baya_Retopo", type='REMESH')
+                mod.mode = 'SHARP'
+            return {'FINISHED'}
+
+        if act == 'MASH_NETWORK':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            dist = obj.modifiers.new(name="MASH_Distribute", type='ARRAY')
+            dist.count = 5
+            dist.relative_offset_displace = (1.35, 0.0, 0.0)
+            wave = obj.modifiers.new(name="MASH_Offset", type='WAVE')
+            wave.height = 0.15
+            wave.width = 1.5
+            return {'FINISHED'}
+
+        if act == 'XGEN_GROOM':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            try:
+                bpy.ops.object.curves_empty_hair_add()
+            except Exception:
+                mod = obj.modifiers.new(name="XGen_Groom", type='PARTICLE_SYSTEM')
+                mod.particle_system.settings.type = 'HAIR'
+                mod.particle_system.settings.count = 500
+                mod.particle_system.settings.hair_length = 0.4
+            return {'FINISHED'}
+
         if act == 'SMOOTH_MESH':
             if obj.type != 'MESH':
                 return {'CANCELLED'}
@@ -808,15 +872,16 @@ class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
 class MAYA_STYLE_OT_assign_shader(bpy.types.Operator):
     bl_idname = "maya_style.assign_shader"
     bl_label = "Assign Maya-Style Material"
-    bl_description = "Create and assign a Maya-equivalent shader (Standard Surface, Lambert, Blinn, Phong, Surface Shader)"
+    bl_description = "Create and assign a Maya 2027 shader (OpenPBR Surface, Standard Surface, Lambert, Blinn, Phong, Surface Shader)"
     bl_options = {'REGISTER', 'UNDO'}
     shader_type: EnumProperty(items=[
-        ('STANDARD_SURFACE', "Standard Surface", "Modern PBR surface shader"),
+        ('OPENPBR_SURFACE', "OpenPBR Surface (Maya 2027)", "Maya 2027 default OpenPBR surface shader (roughness=0.3, IOR=1.5)"),
+        ('STANDARD_SURFACE', "Standard Surface", "Modern PBR surface shader (roughness=0.2, IOR=1.5)"),
         ('LAMBERT', "Lambert", "Matte diffuse surface shader with no specular highlight"),
         ('BLINN', "Blinn", "Soft metallic/glossy highlight shader"),
         ('PHONG', "Phong", "Sharp glossy highlight shader"),
         ('SURFACE_SHADER', "Surface Shader", "Unlit flat emission surface shader"),
-    ], default='STANDARD_SURFACE')
+    ], default='OPENPBR_SURFACE')
 
     @classmethod
     def poll(cls, context):
@@ -824,7 +889,8 @@ class MAYA_STYLE_OT_assign_shader(bpy.types.Operator):
 
     def execute(self, context):
         presets = {
-            'STANDARD_SURFACE': ("standardSurface1", (0.8, 0.8, 0.8, 1.0), 0.25, 0.0, 0.5),
+            'OPENPBR_SURFACE': ("openPBRSurface1", (0.8, 0.8, 0.8, 1.0), 0.30, 0.0, 0.5),
+            'STANDARD_SURFACE': ("standardSurface1", (0.8, 0.8, 0.8, 1.0), 0.20, 0.0, 0.5),
             'LAMBERT': ("lambert1", (0.5, 0.5, 0.5, 1.0), 1.0, 0.0, 0.0),
             'BLINN': ("blinn1", (0.6, 0.6, 0.65, 1.0), 0.35, 0.15, 0.6),
             'PHONG': ("phong1", (0.7, 0.7, 0.75, 1.0), 0.12, 0.0, 0.8),
@@ -838,6 +904,8 @@ class MAYA_STYLE_OT_assign_shader(bpy.types.Operator):
             bsdf.inputs['Base Color'].default_value = color
             bsdf.inputs['Roughness'].default_value = roughness
             bsdf.inputs['Metallic'].default_value = metallic
+            if 'IOR' in bsdf.inputs:
+                bsdf.inputs['IOR'].default_value = 1.5
             if 'Specular IOR Level' in bsdf.inputs:
                 bsdf.inputs['Specular IOR Level'].default_value = spec
             if self.shader_type == 'SURFACE_SHADER' and 'Emission Color' in bsdf.inputs:
@@ -889,6 +957,14 @@ class MAYA_STYLE_OT_command_exec(bpy.types.Operator):
             "polyTorus": lambda: bpy.ops.mesh.primitive_torus_add(),
             "CreatePolygonTorus": lambda: bpy.ops.mesh.primitive_torus_add(),
             "circle": lambda: bpy.ops.curve.primitive_nurbs_circle_add(),
+            "sweepMesh": lambda: bpy.ops.maya_style.poly_action(action='SWEEP_MESH'),
+            "CreateSweepMesh": lambda: bpy.ops.maya_style.poly_action(action='SWEEP_MESH'),
+            "polyRemesh": lambda: bpy.ops.maya_style.poly_action(action='REMESH'),
+            "Remesh": lambda: bpy.ops.maya_style.poly_action(action='REMESH'),
+            "polyRetopo": lambda: bpy.ops.maya_style.poly_action(action='RETOPO_MESH'),
+            "Retopologize": lambda: bpy.ops.maya_style.poly_action(action='RETOPO_MESH'),
+            "MASHnewNetwork": lambda: bpy.ops.maya_style.poly_action(action='MASH_NETWORK'),
+            "openPBRSurface": lambda: bpy.ops.maya_style.assign_shader(shader_type='OPENPBR_SURFACE'),
             "spaceLocator": lambda: bpy.ops.maya_style.poly_action(action='LOCATOR'),
             "CreateLocator": lambda: bpy.ops.maya_style.poly_action(action='LOCATOR'),
             "CenterPivot": lambda: bpy.ops.maya_style.poly_action(action='CENTER_PIVOT'),
@@ -970,6 +1046,7 @@ class MAYA_STYLE_MT_assign_material(bpy.types.Menu):
     def draw(self, context):
         lay = self.layout
         for stype, label, icon in [
+            ('OPENPBR_SURFACE', "OpenPBR Surface (Maya 2027)", 'SHADING_RENDERED'),
             ('STANDARD_SURFACE', "Standard Surface", 'SHADING_RENDERED'),
             ('LAMBERT', "Lambert (Matte)", 'SHADING_SOLID'),
             ('BLINN', "Blinn (Soft Specular)", 'MATERIAL'),
@@ -1114,6 +1191,54 @@ class MAYA_STYLE_MT_convert_selection(bpy.types.Menu):
         pie.operator("mesh.select_more", text="Grow Selection  >", icon='ADD')
 
 
+class MAYA_STYLE_MT_hotbox_panes(bpy.types.Menu):
+    """Hotbox North/East Marking Menu matching Maya 2027 menu_CommonModelingPanes.mel & menu_ChangePanelLayout.mel."""
+    bl_label = "Panels & Layouts"
+    bl_idname = "MAYA_STYLE_MT_hotbox_panes"
+
+    def draw(self, context):
+        lay = self.layout
+        lay.label(text="Panel Layouts (Maya Hotbox)", icon='VIEW_ORTHO')
+        lay.operator("screen.region_quadview", text="Four View / Single View  (Space)", icon='VIEW_ORTHO')
+        lay.operator("view3d.view_persportho", text="Perspective / Orthographic", icon='VIEW_PERSPECTIVE')
+        lay.operator("view3d.view_axis", text="Top View (+Y / +Z)").type = 'TOP'
+        lay.operator("view3d.view_axis", text="Front View").type = 'FRONT'
+        lay.operator("view3d.view_axis", text="Right / Side View").type = 'RIGHT'
+        lay.separator()
+        lay.label(text="Common Modeling & Scene Panes", icon='WORKSPACE')
+        lay.operator("maya_style.workspace", text="Baya 3D Main Viewport", icon='VIEW3D').name = "Baya 3D"
+        lay.operator("maya_style.workspace", text="Persp / UV Editor", icon='UV').name = "UV Editing"
+        lay.operator("maya_style.workspace", text="Hypershade / Shader Editor", icon='NODE_MATERIAL').name = "Materials"
+        lay.operator("maya_style.workspace", text="Persp / Graph Editor", icon='ANIM').name = "Animation"
+        lay.operator("maya_style.workspace", text="Bifrost / Geometry Nodes", icon='GEOMETRY_NODES').name = "Procedural FX"
+        lay.operator("maya_style.workspace", text="Script Editor", icon='CONSOLE').name = "Scripting"
+
+
+class MAYA_STYLE_MT_hotbox_visibility(bpy.types.Menu):
+    """Hotbox South Marking Menu matching Maya 2027 menu_ControlPaneVisibility.mel."""
+    bl_label = "UI & Pane Visibility"
+    bl_idname = "MAYA_STYLE_MT_hotbox_visibility"
+
+    def draw(self, context):
+        lay = self.layout
+        ms = getattr(context.scene, "maya_style", None)
+        lay.label(text="Right Dock Panes (Ctrl+A)", icon='MENU_PANEL')
+        lay.operator("maya_style.channel_toggle", text="Channel Box / Layer Editor", icon='PROPERTIES').mode = "CHANNEL_BOX"
+        lay.operator("maya_style.channel_toggle", text="Modeling Toolkit", icon='MOD_BUILD').mode = "MODELING_TOOLKIT"
+        lay.operator("maya_style.channel_toggle", text="Attribute Editor", icon='PREFERENCES').mode = "ATTRIBUTE_EDITOR"
+        lay.operator("maya_style.channel_toggle", text="Show All Right-Dock Panels", icon='MENU_PANEL').mode = "ALL"
+        lay.operator("maya_style.channel_toggle", text="Show / Hide Right Dock", icon='HIDE_OFF').mode = "TOGGLE"
+        if ms is not None:
+            lay.separator()
+            lay.label(text="UI Elements & HUD", icon='INFO')
+            lay.prop(ms, "show_status_line", text="Status Line")
+            lay.prop(ms, "show_hud", text="Viewport HUD")
+            lay.prop(ms, "show_hud_polycount", text="HUD: Poly Count")
+            lay.prop(ms, "show_hud_camera", text="HUD: Camera & Axis")
+            lay.separator()
+            lay.prop(ms, "coord_system", expand=True)
+
+
 class MAYA_STYLE_MT_hotbox(bpy.types.Menu):
     bl_label = "Baya 3D Hotbox"
 
@@ -1122,11 +1247,11 @@ class MAYA_STYLE_MT_hotbox(bpy.types.Menu):
         pie.menu("MAYA_STYLE_MT_display", text="Display / View")
         pie.menu("MAYA_STYLE_MT_shelf_create", text="Create")
         pie.operator("screen.region_quadview", text="Single / Four Views  Space")
-        pie.operator("wm.call_menu_pie", text="Selection  RMB").name = "MAYA_STYLE_MT_components"
-        pie.menu("TOPBAR_MT_file", text="File")
+        pie.operator("wm.call_menu_pie", text="Selection Masks  RMB").name = "MAYA_STYLE_MT_components"
+        pie.menu("MAYA_STYLE_MT_hotbox_panes", text="Panels & Layouts")
         pie.menu("MAYA_STYLE_MT_modify", text="Modify")
         pie.menu("MAYA_STYLE_MT_mesh", text="Mesh / Edit Mesh")
-        pie.menu("MAYA_STYLE_MT_windows", text="Windows / Menu Sets")
+        pie.menu("MAYA_STYLE_MT_hotbox_visibility", text="UI & Pane Visibility")
 
 
 class MAYA_STYLE_OT_hotbox(bpy.types.Operator):
@@ -1460,6 +1585,8 @@ _classes = (
     MAYA_STYLE_MT_create,
     MAYA_STYLE_MT_context_tools,
     MAYA_STYLE_MT_convert_selection,
+    MAYA_STYLE_MT_hotbox_panes,
+    MAYA_STYLE_MT_hotbox_visibility,
     MAYA_STYLE_MT_hotbox,
     MAYA_STYLE_OT_hotbox,
     MAYA_STYLE_OT_scrub,
