@@ -1,18 +1,11 @@
-# Current limits
+# Current Limits & Engine Differences
 
-Baya 3D is a Blender add-on. It does not replace Blender's engine or implement Autodesk Maya itself. The project is experimental and has not completed a full mode-by-mode hotkey audit.
+Baya 3D is a clean-room Blender add-on (`GPL-3.0-or-later`). It provides a comprehensive Maya-inspired UI, coordinate view, and keyboard/mouse workflow on top of Blender 5.3, while using Blender's native geometry, modifier, animation, and rendering engines under the hood.
 
-- Blender's coordinate system remains Z-up. Scene files remain `.blend`; MEL and Maya `.ma`/`.mb` support are not supplied.
-- Modifiers and nodes provide Blender's equivalent of input history. Maya's dependency graph, construction history and Attribute Editor are not recreated.
-- The Channel Box is a Blender sidebar panel; detailed attributes remain in Blender's native Properties editor.
-- The hotbox uses Blender menus/pies. The complete Maya menu grid and exact held-Space release behavior are unfinished.
-- Four-view uses Blender's quad-view layout. Existing workspaces and editor layouts influence the result.
-- T/manipulator behavior is limited to the operators and gizmos available in Blender. Maya's node-specific manipulators are not available.
-- Held X/C/V snapping and D pivot-edit gestures are unfinished. Blender's header controls remain available.
-- Smooth preview uses dedicated Subdivision Surface and smooth-shading Geometry Nodes modifiers, preserving base geometry and existing modifiers. Preview rendering is disabled by default; enable the preview modifiers' render visibility intentionally if wanted.
-- 6/7 display modes use Blender material preview/rendering. Arnold, Bifrost, nCloth and Maya-specific animation layers are not included.
-- F12 requests the UV Editing workspace rather than a Maya in-viewport UV selection mask. Workspace switches require that workspace in the file.
-- K scrubbing updates Blender's scene; Maya's held-pose scrub behavior is not replicated.
-- The source installer adds the add-on/keymap and optionally the theme. It does not ship a saved startup scene or recreate a user's previous local layout.
+- **Coordinate System (`Maya Y-Up` vs `Blender Z-Up`)**: The Baya Channel Box and Viewport HUD default to **Maya Y-Up (`XYZ`)** (mapping `Y` to height and `Z` to depth for `Translate`, `Rotate`, and `Scale`) and allow switching to **Blender Z-Up (`XYZ`)** at any time. Internally, Blender's viewport world grid and `.blend` data model remain Z-up.
+- **Scene Formats & MEL**: Scene files remain native `.blend` (with FBX/OBJ/USD/Alembic import/export via `File`). The bottom Command Bar executes common MEL command aliases (`polyCube`, `polySphere`, `CenterPivot`, `DeleteHistory`, `FreezeTransformations`, `CombinePolygons`, `select -all`, etc.) and `bpy.ops.*` expressions, rather than a full Maya MEL interpreter or `.ma`/`.mb` binary parser.
+- **Construction History (`INPUTS`)**: Modifiers and Geometry Nodes provide Blender's equivalent of construction history. Clicking **Delete History** bakes active construction modifiers into the mesh while preserving your non-destructive `1/2/3` Smooth Mesh Preview modifiers.
+- **Attribute Editor & Shaders**: The Baya Attribute Editor (`AE`) provides node tabs (`Transform`, `Shape`, `Shader`, `Render`) and one-click Maya shader presets (*Standard Surface*, *Lambert*, *Blinn*, *Phong*, *Surface Shader*) built on Blender's Principled BSDF node tree.
+- **Smooth Mesh Preview (`1 / 2 / 3`)**: Uses dedicated Subdivision Surface and smooth-shading Geometry Nodes modifiers, preserving base geometry and existing artist modifiers. Render visibility on preview modifiers is off by default so base-mesh renders stay predictable unless explicitly enabled.
 
-See [ROADMAP.md](../ROADMAP.md) for planned improvements. Contributions should describe the exact action, compatible Blender equivalent and remaining differences.
+See [ROADMAP.md](../ROADMAP.md) for upcoming enhancements.

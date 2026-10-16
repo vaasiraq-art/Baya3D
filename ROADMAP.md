@@ -1,35 +1,19 @@
 # Roadmap
 
-This is a direction for contributors, not a claim that the features below are complete.
+This is a direction for contributors and tracks what has landed in **Baya 3D v2.0** alongside upcoming work.
 
-## Priority 1: dependable everyday controls
+## Completed in v2.0
 
-- Audit physical Q/W/E/R/T events after cold startup, keymap reload and add-on re-enable.
-- Test object, mesh, curve, armature, pose and editor contexts; resolve conflicting mode handlers.
-- Preserve custom operator properties when presets load before operator registration.
-- Expand automated keymap and data-preservation regressions, plus a repeatable interactive checklist.
-- Define T manipulator behavior and Y/G history behavior precisely; document approximations.
-- Add safe per-feature configuration and predictable disable/uninstall behavior.
+- **Top Menu Bar with Menu Sets (`F2`–`F6`)**: Dynamic switching between *Modeling*, *Rigging*, *Animation*, *FX*, and *Rendering* menu sets.
+- **Status Line & 8 Tabbed Shelves**: Selection masks (`Obj`, `Vertex`, `Edge`, `Face`, `Multi`, `UV`), snapping toggles (`X` Grid, `C` Curve/Edge, `V` Vertex, `D` Pivot, `B` Soft Select, `Symmetry`), history/transform buttons, and 8 shelves (*Curves*, *Polygons*, *Sculpting*, *UV Editing*, *Rigging*, *Animation*, *Rendering*, *FX*).
+- **Maya Y-Up `XYZ` Coordinate Mode**: Live `Y-Up` (`Translate/Rotate/Scale X, Y, Z`) display and editing in the Channel Box with one-click switching between `Maya Y-Up (XYZ)` and `Blender Z-Up (XYZ)`.
+- **Right Dock Switcher (`Ctrl + A`)**: Integrated **Channel Box / Display Layers**, **Modeling Toolkit (`MTK`)**, and **Attribute Editor (`AE`)** with shader presets (*Standard Surface*, *Lambert*, *Blinn*, *Phong*, *Surface Shader*).
+- **Context-Sensitive Marking Menus & Held Hotbox**: `RMB` Component/Object Marking Menu, `Shift + RMB` context-aware Polygon Tool Marking Menu, `Ctrl + RMB` Selection Conversion Menu, held-`Space` Hotbox with re-entry guard, held `X/C/V` snapping, and `D`/`Insert` Pivot Edit mode.
+- **Viewport Heads-Up Display (`HUD`) & MEL/Python Command Bar**: Live Poly Count, Object Details, active Snap/Pivot banners, camera & axis indicator, and a bottom MEL/Python command bar + playback controls.
 
-## Priority 2: interaction and workspace parity
+## Next Priorities
 
-- A held-Space hotbox with clear press/release/cancel semantics.
-- Context-sensitive marking menus and stable four-view transitions.
-- More complete Channel Box/Attribute Editor switching and input history navigation.
-- Held X/C/V snapping and D pivot-edit workflows, with mode-aware conflict handling.
-- Portable optional workspace/theme presets and version migration.
-
-## Priority 3: production workflows
-
-- Rigging shelves for joint/armature creation, parenting, skinning and weight editing.
-- Animation workflow reviews for keying, curve editing, playback, scrubbing and pose tools.
-- UV and modeling tool parity grounded in Blender's available operators.
-- Better material, rendering and FX entry points while preserving Blender terminology where needed.
-- Accessibility, configurable visual density, localization and documentation examples.
-
-## Release readiness
-
-- Support a stable Blender release with a documented compatibility matrix.
-- Package signed/checksummed artifacts where practical and publish reproducible build instructions.
-- Expand platform testing beyond the original Windows setup.
-- Review interoperability expectations: Maya scene formats, MEL, Arnold, Bifrost and nCloth are not supplied by this add-on. Separate integrations would require independent design and review.
+- Expand interactive modal options for polygon tools (live in-view option popups for Extrude, Bevel, and Multi-Cut).
+- Deeper UV Editor shelf and marking-menu integration inside the 2D UV Editor space.
+- Custom user-editable Shelf tab (`Custom`) for pinning any operator from the UI.
+- Support upcoming stable Blender 5.x releases with a documented compatibility matrix and cross-platform CI checks.
