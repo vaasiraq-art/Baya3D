@@ -2,20 +2,21 @@
 
 # Baya 3D
 
-**An open-source, Maya-inspired workspace and keyboard workflow for Blender.**
+**An open-source, Maya-inspired workspace, UI, coordinate system and keyboard workflow for Blender.**
 
-Baya 3D brings familiar navigation, transform keys, shelves, a Channel Box and smooth mesh preview to Blender. The aim is to help artists move between familiar workflows while keeping Blender's modeling, rendering and animation tools available.
+Baya 3D brings familiar Maya-style navigation, Menu Sets, Status Line, Tabbed Shelves, a Channel Box (with **Maya Y-Up `XYZ`** coordinate display and editing), Modeling Toolkit, Attribute Editor, context-sensitive Marking Menus, Viewport Heads-Up Display (HUD), MEL/Python Command Bar, and `1/2/3` Smooth Mesh Preview to Blender 5.3.
 
-**Status: experimental.** Development currently targets **Blender 5.3.0 Beta**. Keyboard behavior and editor integration are being actively tested. Earlier Blender versions and future beta builds are not yet supported. This repository contains an add-on and optional Windows launcher source; install Blender separately.
+**Status: experimental (v2.0).** Development targets **Blender 5.3.0 Beta**. This repository contains a 100% clean-room `GPL-3.0-or-later` add-on and optional Windows launcher source; install Blender separately.
 
 ## What you can try
 
-- Alt + mouse navigation and Q/W/E/R/T selection and transform tools.
-- Modeling, sculpting, rigging, animation, rendering and FX shelves.
-- Transform channels, modifier inputs/history and display collections in the sidebar.
-- 1/2/3 smooth mesh preview and 4/5/6/7 viewport display modes.
-- Component selection shortcuts, creation/selection pies and a Space hotbox approximation.
-- A charcoal theme and optional Baya 3D launcher with original artwork.
+- **Top Menu Bar with Menu Sets (`F2`–`F6`)**: Switch between *Modeling*, *Rigging*, *Animation*, *FX*, and *Rendering* menu sets (`Mesh`, `Edit Mesh`, `Mesh Tools`, `Mesh Display`, `Curves`, `Surfaces`, `Deform`, `UV`, `Skeleton`, `Skin`, `Constrain`, `Key`, `Playback`, `FX / Dynamics`, `Lighting/Shading`, `Render`).
+- **Status Line & 8 Tabbed Shelves**: Selection masks (`Object F8`, `Vertex F9`, `Edge F10`, `Face F11`, `Multi`, `UV F12`), snapping toggles (`Grid X`, `Curve/Edge C`, `Vertex V`, `Edit Pivot D`, `Soft Select B`, `Symmetry X`), history/transform icons (`Center Pivot`, `Delete History`, `Freeze Transformations`), and shelves for *Curves*, *Polygons*, *Sculpting*, *UV Editing*, *Rigging*, *Animation*, *Rendering*, and *FX*.
+- **Right Dock (`Ctrl + A`)**: Switch between **Channel Box / Display Layers**, **Modeling Toolkit**, and **Attribute Editor** (`Transform`, `Shape`, `Shader` with one-click *Standard Surface / Lambert / Blinn / Phong / Surface Shader* presets, and `Render`).
+- **Maya Y-Up `XYZ` Coordinate System**: View and edit `Translate X/Y/Z`, `Rotate X/Y/Z`, and `Scale X/Y/Z` in Maya's `Y-Up` convention (`Y` = height, `Z` = depth) or toggle to native `Blender Z-Up` at any time.
+- **Navigation, Snapping & Pivot Editing**: `Alt + LMB/MMB/RMB` camera navigation, `Q/W/E/R/T` tools, held `X / C / V` snapping (Grid / Curve-Edge / Vertex), `D` / `Insert` Pivot Edit mode, `B` Soft Selection, and `1/2/3` non-destructive Smooth Mesh Preview.
+- **Context-Sensitive Marking Menus & Hotbox**: `RMB` Component/Object Marking Menu, `Shift + RMB` context-aware Polygon Tool Marking Menu, `Ctrl + RMB` Selection Conversion Menu, and `Space` (tap for Four-View, hold for Hotbox).
+- **Viewport HUD & Bottom Command Bar**: Live Poly Count (`Verts`, `Edges`, `Faces`, `Tris`, `UVs`), Object Details, active Snap/Pivot banners, camera & axis HUD, plus a bottom **MEL / Python Command Line** and Time/Range controls.
 
 See the [shortcut guide](docs/shortcuts.md), [known limits](docs/limitations.md) and [roadmap](ROADMAP.md). Exact Maya behavior is a development goal, not a current compatibility guarantee. Blender's engine, data model and `.blend` file format remain in use.
 
@@ -26,16 +27,16 @@ Save your work and close other Blender windows using the same preferences before
 From a cloned checkout on Windows:
 
 ```powershell
-.\scripts\install.ps1 -BlenderExe "C:\path\to\Blender\blender.exe"
+.\scripts\install.ps1 -BlenderExe "C:\path\to\Blender\blender.exe" -Theme
 ```
 
-The script can also find `BLENDER_EXE`, `blender` on `PATH`, or a Blender executable beside the repository. Use `-Theme` to apply the optional charcoal theme.
+The script can also find `BLENDER_EXE`, `blender` on `PATH`, or a Blender executable beside the repository. Use `-Theme` to apply the charcoal Maya-style theme.
 
 On other platforms, run Blender's bundled Python installer directly:
 
 ```sh
 blender --background --python scripts/install.py
-# Optional theme:
+# Optional charcoal theme:
 blender --background --python scripts/install.py -- --theme
 ```
 
@@ -43,21 +44,16 @@ Restart Blender after installation. Viewport keys work when the pointer is over 
 
 See [installation and recovery](docs/install.md) for exact behavior, manual enablement, development and backups. The optional [Windows launcher](branding/README.md) can be built from source; no engine binaries are distributed here.
 
-## Help build it
-
-Contributors are welcome: Blender Python developers, technical artists, modelers, riggers, animators, UI designers and testers. Small, well-tested improvements are especially useful. Start with [CONTRIBUTING.md](CONTRIBUTING.md), [help wanted](docs/help-wanted.md) and the [roadmap](ROADMAP.md), or open an issue describing a reproducible problem.
-
-Current priorities are reliable keyboard behavior across modes, tool/manipulator parity, held hotbox behavior, and practical rigging and animation workflows. A useful report includes the Blender build, operating system, active keymap, mode, focused editor, expected action and actual result. Never upload personal scenes or preferences unless you have reviewed and intentionally chosen to share them.
-
 ## Development checks
 
 ```sh
 python -m compileall -q blender_maya scripts tests
 python scripts/build_addon.py
+python -m unittest discover -s tests -p "test_*.py" -v
 blender --background --factory-startup --python tests/blender_smoke.py
 ```
 
-The first two checks require only Python. The Blender smoke test runs in memory and does not save preferences or scenes. Interactive mouse/keyboard behavior still needs the [manual test checklist](docs/testing.md).
+The first three checks require only Python. The Blender smoke test runs in memory and does not save preferences or scenes. Interactive mouse/keyboard behavior still needs the [manual test checklist](docs/testing.md).
 
 ## License and attribution
 

@@ -1,10 +1,10 @@
 bl_info = {
     'name': 'Baya 3D',
-    'author': 'Baya 3D local customization',
-    'version': (1, 1, 0),
+    'author': 'Baya 3D clean-room open-source workspace',
+    'version': (2, 0, 0),
     'blender': (5, 3, 0),
-    'location': 'Baya 3D > Shelf and Channel Box',
-    'description': 'Baya 3D workspace with Maya-inspired controls, shelves and channel box',
+    'location': 'Topbar Menu Sets > Status Line > Shelf > Right Dock (Baya)',
+    'description': 'Full Maya-inspired workspace: Menu Sets, Status Line, Shelves, Channel Box (Maya Y-Up XYZ), Modeling Toolkit, Attribute Editor, Marking Menus, Hotbox, HUD & MEL Command Bar',
     'category': 'Interface',
 }
 

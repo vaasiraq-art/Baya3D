@@ -2,6 +2,7 @@
 """Run with Blender --background --factory-startup; never save user files."""
 
 from pathlib import Path
+import math
 import sys
 
 import bpy
@@ -80,6 +81,81 @@ def check_preview_preserves_data():
         require(not any(modifier.show_render for modifier in preview), "Preview unexpectedly affects final renders")
 
 
+def check_maya_workflow_and_coordinates():
+    scene = bpy.context.scene
+    ms = scene.maya_style
+    area = next(area for area in bpy.context.screen.areas if area.type == "VIEW_3D")
+    region = next(region for region in area.regions if region.type == "WINDOW")
+
+    with bpy.context.temp_override(area=area, region=region):
+        # 1. Maya Y-Up vs Blender Z-Up XYZ Coordinate Mapping
+        obj = bpy.context.object
+        require(ms.coord_system == "MAYA_Y_UP", "Default coordinate system should be MAYA_Y_UP")
+        ms.maya_tx = 2.5
+        ms.maya_ty = 7.0
+        ms.maya_tz = -4.0
+        require(math.isclose(obj.location.x, 2.5, abs_tol=1e-5), "Maya TX did not map to X")
+        require(math.isclose(obj.location.z, 7.0, abs_tol=1e-5), "Maya TY (Up) did not map to Blender Z")
+        require(math.isclose(obj.location.y, -4.0, abs_tol=1e-5), "Maya TZ (Depth) did not map to Blender Y")
+
+        # 2. Freeze & Reset Transformations
+        ms.maya_sx = 2.0
+        ms.maya_sy = 3.0
+        ms.maya_sz = 1.5
+        require("FINISHED" in bpy.ops.maya_style.poly_action(action="FREEZE_ALL"), "Freeze All failed")
+        require(all(math.isclose(v, 0.0, abs_tol=1e-5) for v in obj.location), "Freeze All did not zero location")
+        require(all(math.isclose(v, 1.0, abs_tol=1e-5) for v in obj.scale), "Freeze All did not reset scale to 1")
+        require("FINISHED" in bpy.ops.maya_style.poly_action(action="CENTER_PIVOT"), "Center Pivot failed")
+
+        # 3. Component Mode Switching (F9, F10, F11, Multi, F8)
+        for comp, expected_mask in [
+            ("VERT", (True, False, False)),
+            ("EDGE", (False, True, False)),
+            ("FACE", (False, False, True)),
+            ("MULTI", (True, True, True)),
+        ]:
+            require("FINISHED" in bpy.ops.maya_style.component(mode=comp), f"Component mode {comp} failed")
+            require(bpy.context.mode == "EDIT_MESH", f"Component mode {comp} did not enter EDIT_MESH")
+            require(tuple(scene.tool_settings.mesh_select_mode) == expected_mask, f"Mask mismatch for {comp}")
+        require("FINISHED" in bpy.ops.maya_style.component(mode="OBJECT"), "Object mode F8 failed")
+        require(bpy.context.mode == "OBJECT", "Did not return to OBJECT mode")
+
+        # 4. Duplicate, Combine, Delete History
+        require("FINISHED" in bpy.ops.maya_style.duplicate(), "Duplicate failed")
+        dup = bpy.context.object
+        dup.location.x += 3.0
+        obj.select_set(True)
+        dup.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        require("FINISHED" in bpy.ops.maya_style.poly_action(action="COMBINE"), "Combine failed")
+        require("FINISHED" in bpy.ops.maya_style.poly_action(action="DELETE_HISTORY"), "Delete History failed")
+        non_preview_mods = [m for m in obj.modifiers if not m.name.startswith("Baya ")]
+        require(len(non_preview_mods) == 0, "Delete History left non-preview modifiers behind")
+
+        # 5. Pivot Mode & Snap Toggles
+        require("FINISHED" in bpy.ops.maya_style.pivot_mode(action="TOGGLE"), "Pivot toggle failed")
+        require(scene.tool_settings.use_transform_data_origin is True, "Pivot mode did not enable data origin")
+        require("FINISHED" in bpy.ops.maya_style.pivot_mode(action="TOGGLE"), "Pivot untoggle failed")
+        require(scene.tool_settings.use_transform_data_origin is False, "Pivot mode did not disable data origin")
+
+        require("FINISHED" in bpy.ops.maya_style.snap_hold(mode="GRID", toggle=True), "Grid snap toggle failed")
+        require(scene.tool_settings.use_snap and "INCREMENT" in scene.tool_settings.snap_elements, "Grid snap not set")
+        require("FINISHED" in bpy.ops.maya_style.snap_hold(mode="GRID", toggle=True), "Grid snap untoggle failed")
+
+        # 6. Shader Assignment & Display Layers
+        for shader in ("STANDARD_SURFACE", "LAMBERT", "BLINN", "PHONG", "SURFACE_SHADER"):
+            require("FINISHED" in bpy.ops.maya_style.assign_shader(shader_type=shader), f"Shader {shader} failed")
+        require(obj.active_material is not None, "Active material not assigned")
+        require("FINISHED" in bpy.ops.maya_style.layer_create(name="props_layer"), "Layer creation failed")
+        require("props_layer" in bpy.data.collections, "Display layer collection not created")
+
+        # 7. Menu Sets, Shelves & MEL Command Line Execution
+        for shelf_id in ("CURVES", "MODEL", "SCULPT", "UV", "RIG", "ANIM", "FX", "RENDER"):
+            require("FINISHED" in bpy.ops.maya_style.shelf(name=shelf_id), f"Shelf {shelf_id} switch failed")
+        for mel_cmd in ("polySphere", "CenterPivot", "FreezeTransformations", "DeleteHistory"):
+            require("FINISHED" in bpy.ops.maya_style.command_exec(command=mel_cmd, language="MEL"), f"MEL {mel_cmd} failed")
+
+
 bpy.utils.keyconfig_init()
 # Reproduce the application order that caused the regression: the generated
 # preset is initialized while custom operator RNA is not yet registered.
@@ -96,6 +172,7 @@ try:
     require(blender_maya.controls.repair_keyconfig(), "Registered preset repair did not run")
     check_keymap()
     check_preview_preserves_data()
-    print("Baya 3D smoke checks passed: preset-before-addon repair, native tools, effective user maps, base-mesh preservation")
+    check_maya_workflow_and_coordinates()
+    print("Baya 3D smoke checks passed: preset-before-addon repair, native tools, effective user maps, base-mesh preservation, Maya XYZ coordinates, modeling workflow, shaders, shelves & MEL command bar")
 finally:
     blender_maya.unregister()

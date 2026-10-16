@@ -1,17 +1,20 @@
-"""Baya 3D controls for Blender 5.3; a complete Maya-inspired keymap.
+"""Baya 3D controls for Blender 5.3; a complete Maya-inspired keymap and toolset.
 
 Importing and registering this module never saves preferences. The installer
 explicitly calls install_keyconfig(), then decides when preferences are saved.
 """
 
+import ast
 import importlib.util
+import math
 import os
 import pprint
 import time
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import EnumProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
+from mathutils import Vector
 
 
 KEYCONFIG_NAME = "Baya_3D"
@@ -21,13 +24,30 @@ _NORMALS_GROUP_TAG = "_maya_style_preview_normals_group"
 _PREVIEW_WIRE = "_maya_style_preview_wire_display"
 _last_tools = {}
 _keyconfig_repair_attempts = 0
-_basic_tools = {"builtin.select", "builtin.select_box", "builtin.select_circle",
-                "builtin.select_lasso", "builtin.move", "builtin.rotate", "builtin.scale",
-                "builtin.transform"}
+_hotbox_active = False
+_snap_hold_active = False
+_basic_tools = {
+    "builtin.select",
+    "builtin.select_box",
+    "builtin.select_circle",
+    "builtin.select_lasso",
+    "builtin.move",
+    "builtin.rotate",
+    "builtin.scale",
+    "builtin.transform",
+}
 
 
 def _view_poll(context):
     return context.area is not None and context.area.type == 'VIEW_3D'
+
+
+def is_hotbox_active():
+    return _hotbox_active
+
+
+def is_snap_hold_active():
+    return _snap_hold_active
 
 
 def _preview_normals_group():
@@ -85,7 +105,14 @@ class MAYA_STYLE_OT_tool(bpy.types.Operator):
 
     def execute(self, context):
         _remember_tool(context)
-        return bpy.ops.wm.tool_set_by_id(name=self.name, cycle=False)
+        try:
+            result = bpy.ops.wm.tool_set_by_id(name=self.name, cycle=False)
+            if self.name not in _basic_tools:
+                _last_tools[_tool_key(context)] = self.name
+            return result
+        except RuntimeError:
+            self.report({'WARNING'}, f"Tool '{self.name}' is unavailable in this mode")
+            return {'CANCELLED'}
 
 
 class MAYA_STYLE_OT_last_tool(bpy.types.Operator):
@@ -204,29 +231,48 @@ class MAYA_STYLE_OT_preview_divisions(bpy.types.Operator):
 class MAYA_STYLE_OT_shading(bpy.types.Operator):
     bl_idname = "maya_style.shading"
     bl_label = "Viewport Display"
+    bl_description = "Switch Maya-style viewport shading modes (4/5/6/7) or Wireframe on Shaded"
     mode: EnumProperty(items=[(value, label, "") for value, label in (
-        ('WIREFRAME', "Wireframe"), ('SOLID', "Shaded"),
-        ('MATERIAL', "Textured / Material Preview"), ('RENDERED', "Scene Lights / Rendered"))])
+        ('WIREFRAME', "Wireframe"),
+        ('SOLID', "Shaded"),
+        ('MATERIAL', "Textured / Material Preview"),
+        ('RENDERED', "Scene Lights / Rendered"),
+        ('WIRE_ON_SHADED', "Wireframe on Shaded"),
+        ('XRAY', "X-Ray Toggle"),
+    )])
 
     @classmethod
     def poll(cls, context):
         return _view_poll(context)
 
     def execute(self, context):
-        context.space_data.shading.type = self.mode
+        space = context.space_data
+        if self.mode == 'WIRE_ON_SHADED':
+            space.overlay.show_wireframes = not space.overlay.show_wireframes
+            return {'FINISHED'}
+        if self.mode == 'XRAY':
+            space.shading.show_xray = not space.shading.show_xray
+            return {'FINISHED'}
+        space.shading.type = self.mode
         if self.mode == 'RENDERED':
-            context.space_data.shading.use_scene_lights_render = True
-            context.space_data.shading.use_scene_world_render = True
+            space.shading.use_scene_lights_render = True
+            space.shading.use_scene_world_render = True
         return {'FINISHED'}
 
 
 class MAYA_STYLE_OT_component(bpy.types.Operator):
     bl_idname = "maya_style.component"
     bl_label = "Selection Mode"
-    bl_description = "Choose object, vertex, edge, face or UV selection"
+    bl_description = "Choose object, vertex, edge, face, multi-component or UV selection"
     mode: EnumProperty(items=[(value, label, "") for value, label in (
-        ('TOGGLE', "Object / Component"), ('OBJECT', "Object"), ('VERT', "Vertex"),
-        ('EDGE', "Edge"), ('FACE', "Face"), ('UV', "UV"))], default='TOGGLE')
+        ('TOGGLE', "Object / Component"),
+        ('OBJECT', "Object"),
+        ('VERT', "Vertex"),
+        ('EDGE', "Edge"),
+        ('FACE', "Face"),
+        ('MULTI', "Multi-Component (Vert + Edge + Face)"),
+        ('UV', "UV"),
+    )], default='TOGGLE')
 
     @classmethod
     def poll(cls, context):
@@ -239,11 +285,15 @@ class MAYA_STYLE_OT_component(bpy.types.Operator):
         if self.mode == 'OBJECT' or (self.mode == 'TOGGLE' and context.mode != 'OBJECT'):
             return bpy.ops.object.mode_set(mode='OBJECT')
         if obj.type != 'MESH':
+            if self.mode == 'TOGGLE' and obj.type in {'CURVE', 'SURFACE', 'ARMATURE', 'LATTICE', 'META'}:
+                return bpy.ops.object.mode_set(mode='EDIT')
             self.report({'INFO'}, "Vertex, edge and face shortcuts require a mesh")
             return {'CANCELLED'}
         if context.mode != 'EDIT_MESH':
             bpy.ops.object.mode_set(mode='EDIT')
-        if self.mode != 'TOGGLE':
+        if self.mode == 'MULTI':
+            context.tool_settings.mesh_select_mode = (True, True, True)
+        elif self.mode != 'TOGGLE':
             bpy.ops.mesh.select_mode(type=self.mode)
         return {'FINISHED'}
 
@@ -258,49 +308,724 @@ class MAYA_STYLE_OT_uv_mode(bpy.types.Operator):
         return context.object is not None and context.object.type == 'MESH'
 
     def execute(self, context):
-        workspace = bpy.data.workspaces.get("UV Editing")
-        if workspace is None:
-            self.report({'WARNING'}, "Use a UV Editor to select UV components; UV Editing workspace is missing")
-            return {'CANCELLED'}
         if context.mode != 'EDIT_MESH':
             bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_mode(type='FACE')
-        context.scene.tool_settings.use_uv_select_sync = False
+        context.scene.tool_settings.use_uv_select_sync = True
         context.scene.tool_settings.uv_select_mode = 'VERTEX'
-        context.window.workspace = workspace
+        workspace = bpy.data.workspaces.get("UV Editing")
+        if workspace is not None and context.window is not None:
+            context.window.workspace = workspace
         return {'FINISHED'}
 
 
 class MAYA_STYLE_OT_duplicate(bpy.types.Operator):
     bl_idname = "maya_style.duplicate"
     bl_label = "Duplicate"
-    bl_description = "Duplicate selected objects in place"
+    bl_description = "Duplicate selected objects or mesh components in place"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        return _view_poll(context) and context.mode == 'OBJECT' and bool(context.selected_objects)
+        if not _view_poll(context):
+            return False
+        if context.mode == 'OBJECT':
+            return bool(context.selected_objects)
+        return context.mode == 'EDIT_MESH' and context.object is not None
 
     def execute(self, context):
+        if context.mode == 'EDIT_MESH':
+            return bpy.ops.mesh.duplicate()
         return bpy.ops.object.duplicate(linked=False)
+
+
+class MAYA_STYLE_OT_snap_hold(bpy.types.Operator):
+    bl_idname = "maya_style.snap_hold"
+    bl_label = "Maya Snap (X: Grid, C: Curve/Edge, V: Point/Vertex)"
+    bl_description = "Hold X for Grid Snap, C for Edge/Curve Snap, or V for Vertex Snap; click in UI to toggle"
+    mode: EnumProperty(items=[
+        ('INCREMENT', "Snap to Grid (X)", "Snap to grid increments"),
+        ('GRID', "Snap to Grid (X)", "Snap to grid increments"),
+        ('EDGE', "Snap to Curve / Edge (C)", "Snap to edges and curves"),
+        ('CURVE', "Snap to Curve / Edge (C)", "Snap to edges and curves"),
+        ('VERTEX', "Snap to Point / Vertex (V)", "Snap to vertices and points"),
+        ('POINT', "Snap to Point / Vertex (V)", "Snap to vertices and points"),
+        ('FACE', "Snap to Face / Live Surface", "Project onto face surfaces"),
+    ], default='INCREMENT')
+    toggle: BoolProperty(default=False)
+
+    _key_type = 'X'
+    _prev_use_snap = False
+    _prev_elements = None
+
+    @classmethod
+    def poll(cls, context):
+        return _view_poll(context)
+
+    def _target_element(self):
+        return {'GRID': 'INCREMENT', 'CURVE': 'EDGE', 'POINT': 'VERTEX'}.get(self.mode, self.mode)
+
+    def execute(self, context):
+        ts = context.scene.tool_settings
+        elem = self._target_element()
+        target_set = {elem} if elem != 'FACE' else {'FACE', 'FACE_PROJECT'}
+        if ts.use_snap and ts.snap_elements == target_set:
+            ts.use_snap = False
+        else:
+            ts.use_snap = True
+            ts.snap_elements = target_set
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        global _snap_hold_active
+        if self.toggle or event.type not in {'X', 'C', 'V'}:
+            return self.execute(context)
+        if _snap_hold_active:
+            return {'PASS_THROUGH'}
+        ts = context.scene.tool_settings
+        elem = self._target_element()
+        self._key_type = event.type
+        self._prev_use_snap = bool(ts.use_snap)
+        self._prev_elements = set(ts.snap_elements)
+        ts.use_snap = True
+        ts.snap_elements = {elem}
+        _snap_hold_active = True
+        labels = {'INCREMENT': "Grid Snap (X)", 'EDGE': "Curve/Edge Snap (C)", 'VERTEX': "Point/Vertex Snap (V)"}
+        context.workspace.status_text_set(f"Maya Snap Active: {labels.get(elem, elem)}  |  Release {self._key_type} to restore")
+        context.window_manager.modal_handler_add(self)
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+        return {'RUNNING_MODAL'}
+
+    def _restore(self, context):
+        global _snap_hold_active
+        _snap_hold_active = False
+        ts = context.scene.tool_settings
+        ts.use_snap = self._prev_use_snap
+        if self._prev_elements:
+            ts.snap_elements = self._prev_elements
+        context.workspace.status_text_set(None)
+        if context.screen:
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+
+    def modal(self, context, event):
+        if event.type in {'ESC', 'WINDOW_DEACTIVATE'} or (event.type == self._key_type and event.value == 'RELEASE'):
+            self._restore(context)
+            return {'FINISHED'}
+        return {'PASS_THROUGH'}
+
+    def cancel(self, context):
+        self._restore(context)
+
+
+class MAYA_STYLE_OT_pivot_mode(bpy.types.Operator):
+    bl_idname = "maya_style.pivot_mode"
+    bl_label = "Maya Pivot Controls (D / Insert)"
+    bl_description = "Toggle Pivot Edit mode (D / Insert), Center Pivot, or move Pivot to Bottom / World Origin"
+    bl_options = {'REGISTER', 'UNDO'}
+    action: EnumProperty(items=[
+        ('TOGGLE', "Edit Pivot Mode (D / Insert)", "Toggle transform affect-only-origins (Maya Edit Pivot)"),
+        ('CENTER', "Center Pivot", "Move object pivot to bounding box center"),
+        ('BOTTOM', "Pivot to Bottom", "Move object pivot to the bottom center of its bounding box"),
+        ('ORIGIN', "Pivot to World Origin (0,0,0)", "Move object pivot to the world origin"),
+        ('CURSOR', "Pivot to 3D Cursor", "Move object pivot to the 3D cursor"),
+        ('RESET_POS', "Reset Pivot Position", "Center pivot on geometry"),
+    ], default='TOGGLE')
+
+    @classmethod
+    def poll(cls, context):
+        return _view_poll(context)
+
+    def execute(self, context):
+        ts = context.scene.tool_settings
+        if self.action == 'TOGGLE':
+            ts.use_transform_data_origin = not ts.use_transform_data_origin
+            if ts.use_transform_data_origin:
+                if context.mode == 'OBJECT':
+                    try:
+                        bpy.ops.wm.tool_set_by_id(name="builtin.move", cycle=False)
+                    except RuntimeError:
+                        pass
+                context.workspace.status_text_set("Maya Pivot Edit Mode: ON  |  Use W/E to move/orient pivot  |  Press D or Insert to exit")
+            else:
+                context.workspace.status_text_set(None)
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+            return {'FINISHED'}
+
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        if not context.selected_editable_objects:
+            self.report({'WARNING'}, "Select an editable object first")
+            return {'CANCELLED'}
+
+        if self.action in {'CENTER', 'RESET_POS'}:
+            return bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+
+        if self.action == 'CURSOR':
+            return bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+
+        saved_cursor = context.scene.cursor.location.copy()
+        try:
+            if self.action == 'ORIGIN':
+                context.scene.cursor.location = (0.0, 0.0, 0.0)
+                bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+            elif self.action == 'BOTTOM':
+                for obj in list(context.selected_editable_objects):
+                    if not obj.bound_box:
+                        continue
+                    world_corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+                    xs = [pt.x for pt in world_corners]
+                    ys = [pt.y for pt in world_corners]
+                    zs = [pt.z for pt in world_corners]
+                    bottom_center = Vector(((min(xs) + max(xs)) * 0.5, (min(ys) + max(ys)) * 0.5, min(zs)))
+                    context.scene.cursor.location = bottom_center
+                    with context.temp_override(selected_editable_objects=[obj], selected_objects=[obj], active_object=obj, object=obj):
+                        bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+        finally:
+            context.scene.cursor.location = saved_cursor
+        return {'FINISHED'}
+
+
+class MAYA_STYLE_OT_poly_action(bpy.types.Operator):
+    bl_idname = "maya_style.poly_action"
+    bl_label = "Maya Polygon / Scene Operation"
+    bl_description = "Execute a Maya-equivalent polygon, history, transform, hierarchy or selection action"
+    bl_options = {'REGISTER', 'UNDO'}
+    action: EnumProperty(items=[
+        ('COMBINE', "Combine", "Combine selected polygon meshes into one mesh"),
+        ('SEPARATE', "Separate", "Separate loose mesh shells or selected faces into objects"),
+        ('EXTRACT_FACES', "Extract Faces", "Separate selected faces into a new mesh object"),
+        ('DUPLICATE_FACES', "Duplicate Faces", "Duplicate selected faces as a new mesh shell"),
+        ('DELETE_HISTORY', "Delete by Type > History", "Apply construction modifiers while preserving smooth preview"),
+        ('FREEZE_ALL', "Freeze Transformations", "Apply location, rotation and scale to object geometry"),
+        ('RESET_TRANSFORMS', "Reset Transformations", "Reset location and rotation to 0 and scale to 1"),
+        ('CENTER_PIVOT', "Center Pivot", "Move pivot to bounding-box center"),
+        ('FILL_HOLE', "Fill Hole", "Fill boundary holes on the mesh"),
+        ('BRIDGE', "Bridge", "Bridge selected edge loops or faces"),
+        ('POKE_FACES', "Poke", "Poke selected faces from their center"),
+        ('POKE', "Poke", "Poke selected faces from their center"),
+        ('TRIANGULATE', "Triangulate", "Convert selected faces to triangles"),
+        ('QUADRANGULATE', "Quadrangulate", "Convert triangles to quads"),
+        ('CIRCULARIZE', "Circularize", "Round selected vertices, edges or faces into a circle"),
+        ('REVERSE_NORMALS', "Reverse Normals", "Flip polygon face normals"),
+        ('CONFORM_NORMALS', "Conform Normals", "Recalculate polygon normals consistently outside"),
+        ('SOFTEN_EDGE', "Soften Edge", "Clear sharp edges and set smooth shading"),
+        ('HARDEN_EDGE', "Harden Edge", "Mark sharp edges or set flat shading"),
+        ('BOOLEAN_UNION', "Boolean Union", "Union selected meshes"),
+        ('BOOLEAN_DIFFERENCE', "Boolean Difference", "Subtract active/second mesh from first mesh"),
+        ('BOOLEAN_INTERSECT', "Boolean Intersection", "Intersect selected meshes"),
+        ('MIRROR_X', "Mirror X", "Mirror mesh across X axis with clipping"),
+        ('MIRROR_Y', "Mirror Y", "Mirror mesh across Y axis with clipping"),
+        ('MIRROR_Z', "Mirror Z", "Mirror mesh across Z axis with clipping"),
+        ('SMOOTH_MESH', "Smooth (Subdivide)", "Subdivide mesh geometry with smoothing"),
+        ('REDUCE_MESH', "Reduce (Decimate)", "Add a Decimate modifier to reduce polygon count"),
+        ('REDUCE', "Reduce (Decimate)", "Add a Decimate modifier to reduce polygon count"),
+        ('REMESH', "Remesh", "Apply or add a Voxel Remesh modifier"),
+        ('GROUP', "Group (Ctrl+G)", "Group selected objects under a new null/empty node"),
+        ('UNGROUP', "Ungroup", "Unparent children of the selected group node, keeping transforms"),
+        ('LOCATOR', "Create Locator", "Create a Maya-style Locator (Empty axes)"),
+        ('SOFT_SELECT_TOGGLE', "Soft Selection Toggle (B)", "Toggle proportional editing (Maya Soft Selection)"),
+        ('CONVERT_TO_VERTICES', "Convert Selection to Vertices", "Convert current component selection to vertices"),
+        ('CONVERT_TO_VERTS', "Convert Selection to Vertices", "Convert current component selection to vertices"),
+        ('CONVERT_TO_EDGES', "Convert Selection to Edges", "Convert current component selection to edges"),
+        ('CONVERT_TO_FACES', "Convert Selection to Faces", "Convert current component selection to faces"),
+        ('DELETE_EDGE_VERTEX', "Delete Edge / Vertex", "Dissolve selected edges and their leftover vertices"),
+    ], default='DELETE_HISTORY')
+
+    @classmethod
+    def poll(cls, context):
+        return _view_poll(context)
+
+    def execute(self, context):
+        act = {
+            'POKE': 'POKE_FACES',
+            'REDUCE': 'REDUCE_MESH',
+            'CONVERT_TO_VERTS': 'CONVERT_TO_VERTICES',
+        }.get(self.action, self.action)
+        if act == 'LOCATOR':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.empty_add(type='PLAIN_AXES')
+            if context.active_object:
+                context.active_object.name = "locator1"
+            return {'FINISHED'}
+
+        if act == 'SOFT_SELECT_TOGGLE':
+            ts = context.scene.tool_settings
+            if context.mode == 'OBJECT':
+                ts.use_proportional_edit_objects = not ts.use_proportional_edit_objects
+            else:
+                ts.use_proportional_edit = not ts.use_proportional_edit
+            return {'FINISHED'}
+
+        if act == 'GROUP':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            selected = list(context.selected_objects)
+            bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0.0, 0.0, 0.0))
+            group_obj = context.active_object
+            group_obj.name = "group1"
+            for obj in selected:
+                if obj != group_obj:
+                    mat = obj.matrix_world.copy()
+                    obj.parent = group_obj
+                    obj.matrix_world = mat
+            for obj in context.selected_objects:
+                obj.select_set(False)
+            group_obj.select_set(True)
+            context.view_layer.objects.active = group_obj
+            return {'FINISHED'}
+
+        if act == 'UNGROUP':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            children = []
+            for obj in list(context.selected_objects):
+                for child in list(obj.children):
+                    mat = child.matrix_world.copy()
+                    child.parent = obj.parent
+                    child.matrix_world = mat
+                    children.append(child)
+                if obj.type == 'EMPTY' and not obj.children:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+            for child in children:
+                child.select_set(True)
+            if children:
+                context.view_layer.objects.active = children[0]
+            return {'FINISHED'}
+
+        obj = context.object
+        if obj is None:
+            self.report({'WARNING'}, "Select an object first")
+            return {'CANCELLED'}
+
+        if act == 'CENTER_PIVOT':
+            return bpy.ops.maya_style.pivot_mode(action='CENTER')
+
+        if act == 'FREEZE_ALL':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            return bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+        if act == 'RESET_TRANSFORMS':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            for item in context.selected_editable_objects:
+                item.location = (0.0, 0.0, 0.0)
+                item.rotation_euler = (0.0, 0.0, 0.0)
+                item.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+                item.scale = (1.0, 1.0, 1.0)
+            return {'FINISHED'}
+
+        if act == 'DELETE_HISTORY':
+            was_edit = context.mode == 'EDIT_MESH'
+            if was_edit:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            applied = 0
+            for item in context.selected_editable_objects:
+                if item.type != 'MESH':
+                    continue
+                preview_uids = {item.get(_PREVIEW_UID), item.get(_NORMALS_UID)}
+                for mod in list(item.modifiers):
+                    if str(mod.persistent_uid) in preview_uids:
+                        continue
+                    try:
+                        with context.temp_override(object=item, active_object=item):
+                            bpy.ops.object.modifier_apply(modifier=mod.name)
+                            applied += 1
+                    except RuntimeError:
+                        pass
+            if was_edit:
+                bpy.ops.object.mode_set(mode='EDIT')
+            self.report({'INFO'}, f"Construction history cleared ({applied} modifier(s) baked)")
+            return {'FINISHED'}
+
+        if act == 'COMBINE':
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            meshes = [item for item in context.selected_editable_objects if item.type == 'MESH']
+            if len(meshes) < 2:
+                self.report({'WARNING'}, "Select at least two polygon meshes to Combine")
+                return {'CANCELLED'}
+            if context.view_layer.objects.active not in meshes:
+                context.view_layer.objects.active = meshes[-1]
+            return bpy.ops.object.join()
+
+        if act == 'SEPARATE':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode == 'EDIT_MESH':
+                return bpy.ops.mesh.separate(type='SELECTED')
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.separate(type='LOOSE')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            return {'FINISHED'}
+
+        if act == 'EXTRACT_FACES':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'EDIT_MESH':
+                bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.separate(type='SELECTED')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            return {'FINISHED'}
+
+        if act == 'DUPLICATE_FACES':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'EDIT_MESH':
+                bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.duplicate()
+            bpy.ops.mesh.separate(type='SELECTED')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            return {'FINISHED'}
+
+        if act in {'BOOLEAN_UNION', 'BOOLEAN_DIFFERENCE', 'BOOLEAN_INTERSECT'}:
+            if context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            meshes = [item for item in context.selected_editable_objects if item.type == 'MESH']
+            if len(meshes) < 2:
+                self.report({'WARNING'}, "Select at least two meshes for Boolean operation")
+                return {'CANCELLED'}
+            active = context.active_object if context.active_object in meshes else meshes[0]
+            cutters = [m for m in meshes if m != active]
+            op_map = {
+                'BOOLEAN_UNION': 'UNION',
+                'BOOLEAN_DIFFERENCE': 'DIFFERENCE',
+                'BOOLEAN_INTERSECT': 'INTERSECT',
+            }
+            for cutter in cutters:
+                mod = active.modifiers.new(name=f"Baya_{op_map[act].title()}", type='BOOLEAN')
+                mod.operation = op_map[act]
+                mod.object = cutter
+                cutter.display_type = 'WIRE'
+                cutter.hide_render = True
+            return {'FINISHED'}
+
+        if act in {'MIRROR_X', 'MIRROR_Y', 'MIRROR_Z'}:
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            mod = obj.modifiers.new(name="Baya_Mirror", type='MIRROR')
+            axis_idx = {'MIRROR_X': 0, 'MIRROR_Y': 1, 'MIRROR_Z': 2}[act]
+            mod.use_axis = (axis_idx == 0, axis_idx == 1, axis_idx == 2)
+            mod.use_bisect_axis = (axis_idx == 0, axis_idx == 1, axis_idx == 2)
+            mod.use_clip = True
+            return {'FINISHED'}
+
+        if act == 'REDUCE_MESH':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            mod = obj.modifiers.new(name="Baya_Reduce", type='DECIMATE')
+            mod.ratio = 0.5
+            return {'FINISHED'}
+
+        if act == 'REMESH':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            mod = obj.modifiers.new(name="Baya_Remesh", type='REMESH')
+            mod.voxel_size = 0.1
+            return {'FINISHED'}
+
+        if act == 'SMOOTH_MESH':
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            was_object = context.mode == 'OBJECT'
+            if was_object:
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.subdivide(number_cuts=1, smoothness=1.0)
+            if was_object:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            return {'FINISHED'}
+
+        if act in {'CONVERT_TO_VERTICES', 'CONVERT_TO_EDGES', 'CONVERT_TO_FACES'}:
+            if obj.type != 'MESH':
+                return {'CANCELLED'}
+            if context.mode != 'EDIT_MESH':
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+            target = {
+                'CONVERT_TO_VERTICES': 'VERT',
+                'CONVERT_TO_EDGES': 'EDGE',
+                'CONVERT_TO_FACES': 'FACE',
+            }[act]
+            bpy.ops.mesh.select_mode(use_extend=False, use_expand=False, type=target)
+            return {'FINISHED'}
+
+        if obj.type != 'MESH':
+            return {'CANCELLED'}
+
+        was_object = context.mode == 'OBJECT'
+        if was_object and act in {'FILL_HOLE', 'REVERSE_NORMALS', 'CONFORM_NORMALS', 'SOFTEN_EDGE', 'HARDEN_EDGE', 'TRIANGULATE', 'QUADRANGULATE', 'POKE_FACES'}:
+            if act == 'SOFTEN_EDGE':
+                return bpy.ops.object.shade_smooth()
+            if act == 'HARDEN_EDGE':
+                return bpy.ops.object.shade_flat()
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+
+        try:
+            if act == 'FILL_HOLE':
+                bpy.ops.mesh.edge_face_add()
+            elif act == 'BRIDGE':
+                bpy.ops.mesh.bridge_edge_loops()
+            elif act == 'POKE_FACES':
+                bpy.ops.mesh.poke()
+            elif act == 'TRIANGULATE':
+                bpy.ops.mesh.quads_convert_to_tris()
+            elif act == 'QUADRANGULATE':
+                bpy.ops.mesh.tris_convert_to_quads()
+            elif act == 'CIRCULARIZE':
+                bpy.ops.transform.tosphere(value=1.0)
+            elif act == 'REVERSE_NORMALS':
+                bpy.ops.mesh.flip_normals()
+            elif act == 'CONFORM_NORMALS':
+                bpy.ops.mesh.normals_make_consistent(inside=False)
+            elif act == 'SOFTEN_EDGE':
+                bpy.ops.mesh.mark_sharp(clear=True)
+                bpy.ops.mesh.faces_shade_smooth()
+            elif act == 'HARDEN_EDGE':
+                bpy.ops.mesh.mark_sharp(clear=False)
+            elif act == 'DELETE_EDGE_VERTEX':
+                bpy.ops.mesh.dissolve_edges(use_verts=True)
+        except RuntimeError as exc:
+            self.report({'WARNING'}, str(exc))
+            if was_object and context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            return {'CANCELLED'}
+
+        if was_object and context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        return {'FINISHED'}
+
+
+class MAYA_STYLE_OT_assign_shader(bpy.types.Operator):
+    bl_idname = "maya_style.assign_shader"
+    bl_label = "Assign Maya-Style Material"
+    bl_description = "Create and assign a Maya-equivalent shader (Standard Surface, Lambert, Blinn, Phong, Surface Shader)"
+    bl_options = {'REGISTER', 'UNDO'}
+    shader_type: EnumProperty(items=[
+        ('STANDARD_SURFACE', "Standard Surface", "Modern PBR surface shader"),
+        ('LAMBERT', "Lambert", "Matte diffuse surface shader with no specular highlight"),
+        ('BLINN', "Blinn", "Soft metallic/glossy highlight shader"),
+        ('PHONG', "Phong", "Sharp glossy highlight shader"),
+        ('SURFACE_SHADER', "Surface Shader", "Unlit flat emission surface shader"),
+    ], default='STANDARD_SURFACE')
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and context.object.type in {'MESH', 'CURVE', 'SURFACE', 'FONT', 'META'}
+
+    def execute(self, context):
+        presets = {
+            'STANDARD_SURFACE': ("standardSurface1", (0.8, 0.8, 0.8, 1.0), 0.25, 0.0, 0.5),
+            'LAMBERT': ("lambert1", (0.5, 0.5, 0.5, 1.0), 1.0, 0.0, 0.0),
+            'BLINN': ("blinn1", (0.6, 0.6, 0.65, 1.0), 0.35, 0.15, 0.6),
+            'PHONG': ("phong1", (0.7, 0.7, 0.75, 1.0), 0.12, 0.0, 0.8),
+            'SURFACE_SHADER': ("surfaceShader1", (0.9, 0.9, 0.9, 1.0), 1.0, 0.0, 0.0),
+        }
+        base_name, color, roughness, metallic, spec = presets[self.shader_type]
+        mat = bpy.data.materials.new(name=base_name)
+        mat.use_nodes = True
+        bsdf = next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is not None:
+            bsdf.inputs['Base Color'].default_value = color
+            bsdf.inputs['Roughness'].default_value = roughness
+            bsdf.inputs['Metallic'].default_value = metallic
+            if 'Specular IOR Level' in bsdf.inputs:
+                bsdf.inputs['Specular IOR Level'].default_value = spec
+            if self.shader_type == 'SURFACE_SHADER' and 'Emission Color' in bsdf.inputs:
+                bsdf.inputs['Emission Color'].default_value = color
+                if 'Emission Strength' in bsdf.inputs:
+                    bsdf.inputs['Emission Strength'].default_value = 1.0
+
+        targets = [o for o in context.selected_editable_objects if hasattr(o.data, 'materials')] or [context.object]
+        for obj in targets:
+            if not obj.data.materials:
+                obj.data.materials.append(mat)
+            elif context.mode == 'EDIT_MESH' and obj == context.object:
+                obj.data.materials.append(mat)
+                obj.active_material_index = len(obj.data.materials) - 1
+                bpy.ops.object.material_slot_assign()
+            else:
+                obj.data.materials[obj.active_material_index] = mat
+        return {'FINISHED'}
+
+
+class MAYA_STYLE_OT_command_exec(bpy.types.Operator):
+    bl_idname = "maya_style.command_exec"
+    bl_label = "Execute MEL / Python Command"
+    bl_description = "Execute the command in Baya's bottom command bar (supports common MEL commands and Python)"
+    bl_options = {'REGISTER', 'UNDO'}
+    command: StringProperty(default="")
+    language: StringProperty(default="MEL")
+
+    def execute(self, context):
+        state = getattr(context.scene, "maya_style", None)
+        raw = (self.command or (state.command_input if state else "")).strip()
+        if not raw:
+            self.report({'INFO'}, "Enter a MEL or Python command first (e.g., polyCube, polySphere, FreezeTransformations)")
+            return {'CANCELLED'}
+
+        cmd_clean = raw.rstrip(";").strip()
+        head = cmd_clean.split()[0] if cmd_clean.split() else ""
+        mel_map = {
+            "polyCube": lambda: bpy.ops.mesh.primitive_cube_add(),
+            "CreatePolygonCube": lambda: bpy.ops.mesh.primitive_cube_add(),
+            "polySphere": lambda: bpy.ops.mesh.primitive_uv_sphere_add(),
+            "CreatePolygonSphere": lambda: bpy.ops.mesh.primitive_uv_sphere_add(),
+            "polyCylinder": lambda: bpy.ops.mesh.primitive_cylinder_add(),
+            "CreatePolygonCylinder": lambda: bpy.ops.mesh.primitive_cylinder_add(),
+            "polyCone": lambda: bpy.ops.mesh.primitive_cone_add(),
+            "CreatePolygonCone": lambda: bpy.ops.mesh.primitive_cone_add(),
+            "polyPlane": lambda: bpy.ops.mesh.primitive_plane_add(),
+            "CreatePolygonPlane": lambda: bpy.ops.mesh.primitive_plane_add(),
+            "polyTorus": lambda: bpy.ops.mesh.primitive_torus_add(),
+            "CreatePolygonTorus": lambda: bpy.ops.mesh.primitive_torus_add(),
+            "circle": lambda: bpy.ops.curve.primitive_nurbs_circle_add(),
+            "spaceLocator": lambda: bpy.ops.maya_style.poly_action(action='LOCATOR'),
+            "CreateLocator": lambda: bpy.ops.maya_style.poly_action(action='LOCATOR'),
+            "CenterPivot": lambda: bpy.ops.maya_style.poly_action(action='CENTER_PIVOT'),
+            "DeleteHistory": lambda: bpy.ops.maya_style.poly_action(action='DELETE_HISTORY'),
+            "FreezeTransformations": lambda: bpy.ops.maya_style.poly_action(action='FREEZE_ALL'),
+            "ResetTransformations": lambda: bpy.ops.maya_style.poly_action(action='RESET_TRANSFORMS'),
+            "CombinePolygons": lambda: bpy.ops.maya_style.poly_action(action='COMBINE'),
+            "polyUnite": lambda: bpy.ops.maya_style.poly_action(action='COMBINE'),
+            "SeparatePolygon": lambda: bpy.ops.maya_style.poly_action(action='SEPARATE'),
+            "polySeparate": lambda: bpy.ops.maya_style.poly_action(action='SEPARATE'),
+            "polyExtrudeFacet": lambda: bpy.ops.mesh.extrude_region_move(),
+            "PolyExtrude": lambda: bpy.ops.mesh.extrude_region_move(),
+            "polyBevel3": lambda: bpy.ops.mesh.bevel(),
+            "BevelPolygon": lambda: bpy.ops.mesh.bevel(),
+            "polySmooth": lambda: bpy.ops.maya_style.poly_action(action='SMOOTH_MESH'),
+            "SmoothPolygon": lambda: bpy.ops.maya_style.poly_action(action='SMOOTH_MESH'),
+            "FillHole": lambda: bpy.ops.maya_style.poly_action(action='FILL_HOLE'),
+            "group": lambda: bpy.ops.maya_style.poly_action(action='GROUP'),
+            "ungroup": lambda: bpy.ops.maya_style.poly_action(action='UNGROUP'),
+            "duplicate": lambda: bpy.ops.maya_style.duplicate(),
+            "SelectAll": lambda: bpy.ops.object.select_all(action='SELECT') if context.mode == 'OBJECT' else bpy.ops.mesh.select_all(action='SELECT'),
+        }
+
+        try:
+            if head in mel_map:
+                mel_map[head]()
+                msg = f"Result: {head}"
+            elif cmd_clean.startswith("select"):
+                if "-cl" in cmd_clean or "-clear" in cmd_clean:
+                    if context.mode == 'OBJECT':
+                        bpy.ops.object.select_all(action='DESELECT')
+                    else:
+                        bpy.ops.mesh.select_all(action='DESELECT')
+                    msg = "Result: selection cleared"
+                else:
+                    if context.mode == 'OBJECT':
+                        bpy.ops.object.select_all(action='SELECT')
+                    else:
+                        bpy.ops.mesh.select_all(action='SELECT')
+                    msg = "Result: selected all"
+            elif cmd_clean.startswith("bpy."):
+                tree = ast.parse(cmd_clean, mode='eval')
+                if not isinstance(tree.body, ast.Call):
+                    raise ValueError("Only bpy.ops.* calls or MEL commands are supported")
+                node = tree.body.func
+                parts = []
+                while isinstance(node, ast.Attribute):
+                    parts.append(node.attr)
+                    node = node.value
+                if isinstance(node, ast.Name):
+                    parts.append(node.id)
+                parts.reverse()
+                if len(parts) != 4 or parts[0] != "bpy" or parts[1] != "ops":
+                    raise ValueError("Only bpy.ops.<category>.<operator>(...) is allowed")
+                op_mod = getattr(bpy.ops, parts[2])
+                op_fn = getattr(op_mod, parts[3])
+                kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in tree.body.keywords if kw.arg}
+                res = op_fn(**kwargs)
+                msg = f"Result: {res}"
+            else:
+                self.report({'WARNING'}, f"Unrecognized command '{head}'. Try MEL (polyCube, FreezeTransformations, DeleteHistory) or bpy.ops.*")
+                return {'CANCELLED'}
+        except Exception as exc:
+            if state is not None and hasattr(state, 'last_command_result'):
+                state.last_command_result = f"Error: {exc}"
+            self.report({'WARNING'}, f"Command error: {exc}")
+            return {'CANCELLED'}
+
+        if state is not None and hasattr(state, 'last_command_result'):
+            state.last_command_result = msg
+        self.report({'INFO'}, f"// {msg} //")
+        return {'FINISHED'}
+
+
+class MAYA_STYLE_MT_assign_material(bpy.types.Menu):
+    bl_label = "Assign New Material"
+    bl_idname = "MAYA_STYLE_MT_assign_material"
+
+    def draw(self, context):
+        lay = self.layout
+        for stype, label, icon in [
+            ('STANDARD_SURFACE', "Standard Surface", 'SHADING_RENDERED'),
+            ('LAMBERT', "Lambert (Matte)", 'SHADING_SOLID'),
+            ('BLINN', "Blinn (Soft Specular)", 'MATERIAL'),
+            ('PHONG', "Phong (Sharp Specular)", 'NODE_MATERIAL'),
+            ('SURFACE_SHADER', "Surface Shader (Unlit)", 'LIGHT_SUN'),
+        ]:
+            lay.operator("maya_style.assign_shader", text=label, icon=icon).shader_type = stype
+
+
+class MAYA_STYLE_MT_normals(bpy.types.Menu):
+    bl_label = "Normals / Soften-Harden"
+    bl_idname = "MAYA_STYLE_MT_normals"
+
+    def draw(self, context):
+        lay = self.layout
+        lay.operator("maya_style.poly_action", text="Soften Edge (Smooth)", icon='SHADING_SOLID').action = 'SOFTEN_EDGE'
+        lay.operator("maya_style.poly_action", text="Harden Edge (Sharp)", icon='MOD_EDGESPLIT').action = 'HARDEN_EDGE'
+        lay.separator()
+        lay.operator("maya_style.poly_action", text="Reverse Normals", icon='FILE_REFRESH').action = 'REVERSE_NORMALS'
+        lay.operator("maya_style.poly_action", text="Conform Normals", icon='CHECKMARK').action = 'CONFORM_NORMALS'
 
 
 class MAYA_STYLE_MT_components(bpy.types.Menu):
     bl_label = "Selection Marking Menu"
+
     def draw(self, context):
         pie = self.layout.menu_pie()
-        for label, mode in (("Vertex  F9", 'VERT'), ("Edge  F10", 'EDGE'),
-                            ("Object  F8", 'OBJECT'), ("Face  F11", 'FACE')):
+        if context.scene and context.scene.tool_settings.use_transform_data_origin:
+            # Matches Maya buildObjectMenuItemsNow.mel when in Edit Pivot mode
+            pie.operator("maya_style.pivot_mode", text="Pivot to Bottom", icon='TRIA_DOWN').action = 'BOTTOM'
+            pie.operator("maya_style.pivot_mode", text="Exit Pivot Mode  D", icon='CHECKMARK').action = 'TOGGLE'
+            pie.operator("maya_style.pivot_mode", text="Center Pivot", icon='PIVOT_MEDIAN').action = 'CENTER'
+            pie.operator("maya_style.pivot_mode", text="Pivot to Origin (0,0,0)", icon='OBJECT_ORIGIN').action = 'ORIGIN'
+            pie.operator("maya_style.pivot_mode", text="Pivot to 3D Cursor", icon='PIVOT_CURSOR').action = 'CURSOR'
+            pie.operator("maya_style.poly_action", text="Freeze Transformations", icon='FREEZE').action = 'FREEZE_ALL'
+            pie.operator("maya_style.poly_action", text="Reset Transformations", icon='LOOP_BACK').action = 'RESET_TRANSFORMS'
+            pie.operator("view3d.view_selected", text="Frame Selection  F")
+            return
+
+        for label, mode in (
+            ("Vertex  F9", 'VERT'),
+            ("Edge  F10", 'EDGE'),
+            ("Object Mode  F8", 'OBJECT'),
+            ("Face  F11", 'FACE'),
+        ):
             pie.operator("maya_style.component", text=label).mode = mode
+        pie.operator("maya_style.component", text="Multi-Component").mode = 'MULTI'
         pie.operator("maya_style.uv_mode", text="UV  F12")
+        pie.menu("MAYA_STYLE_MT_assign_material", text="Assign New Material", icon='MATERIAL')
         menu = "VIEW3D_MT_edit_mesh_context_menu" if context.mode == 'EDIT_MESH' else "VIEW3D_MT_object_context_menu"
-        pie.menu(menu, text="Context Commands")
-        pie.operator("view3d.view_selected", text="Frame Selection  F")
-        pie.operator("view3d.view_all", text="Frame All  A").center = False
+        pie.menu(menu, text="Context / Actions")
 
 
 class MAYA_STYLE_MT_create(bpy.types.Menu):
     bl_label = "Create Marking Menu"
+
     def draw(self, context):
         pie = self.layout.menu_pie()
         pie.operator("mesh.primitive_cube_add", text="Cube", icon='MESH_CUBE')
@@ -310,21 +1035,98 @@ class MAYA_STYLE_MT_create(bpy.types.Menu):
         pie.operator("mesh.primitive_cone_add", text="Cone", icon='MESH_CONE')
         pie.operator("mesh.primitive_torus_add", text="Torus", icon='MESH_TORUS')
         pie.menu("VIEW3D_MT_add", text="All Create Commands", icon='ADD')
-        pie.operator("mesh.primitive_circle_add", text="Circle", icon='MESH_CIRCLE')
+        pie.operator("mesh.primitive_circle_add", text="Circle / Disc", icon='MESH_CIRCLE')
+
+
+class MAYA_STYLE_MT_context_tools(bpy.types.Menu):
+    """Context-sensitive Shift+RMB Poly Tools Marking Menu (matches Maya contextPolyToolsMM.mel)."""
+    bl_label = "Context Poly Tools Marking Menu"
+    bl_idname = "MAYA_STYLE_MT_context_tools"
+
+    def draw(self, context):
+        obj = context.object
+        if obj is None or obj.type != 'MESH':
+            MAYA_STYLE_MT_create.draw(self, context)
+            return
+
+        pie = self.layout.menu_pie()
+        if context.mode != 'EDIT_MESH':
+            # Object Mode Mesh Marking Menu (matches contextPolyToolsObjectMM.mel)
+            pie.operator("mesh.knife_tool" if context.mode == 'EDIT_MESH' else "maya_style.component",
+                         text="Multi-Cut / Component Mode", icon='MOD_TRIANGULATE').mode = 'EDGE' if context.mode != 'EDIT_MESH' else 'EDGE'
+            pie.operator("maya_style.poly_action", text="Smooth Mesh", icon='MOD_SUBSURF').action = 'SMOOTH_MESH'
+            pie.operator("maya_style.poly_action", text="Combine Meshes", icon='AUTOMERGE_ON').action = 'COMBINE'
+            pie.operator("maya_style.poly_action", text="Delete History", icon='CHECKMARK').action = 'DELETE_HISTORY'
+            pie.operator("maya_style.poly_action", text="Mirror X", icon='MOD_MIRROR').action = 'MIRROR_X'
+            pie.operator("maya_style.poly_action", text="Separate Shells", icon='MOD_EXPLODE').action = 'SEPARATE'
+            pie.operator("maya_style.poly_action", text="Boolean Difference", icon='MOD_BOOLEAN').action = 'BOOLEAN_DIFFERENCE'
+            pie.menu("MAYA_STYLE_MT_normals", text="Soften / Harden Edge", icon='NORMALS_FACE')
+            return
+
+        sel_mode = context.tool_settings.mesh_select_mode
+        if sel_mode[2]:
+            # Face Mode (matches contextPolyToolsFaceMM.mel)
+            pie.operator("mesh.knife_tool", text="Multi-Cut / Knife", icon='MOD_TRIANGULATE')
+            pie.operator("mesh.bevel", text="Bevel Face", icon='MOD_BEVEL')
+            pie.operator("mesh.extrude_region_move", text="Extrude Face  Ctrl+E", icon='MOD_SOLIDIFY')
+            pie.operator("mesh.merge", text="Merge to Center", icon='AUTOMERGE_ON').type = 'CENTER'
+            pie.operator("maya_style.poly_action", text="Extract / Separate Faces", icon='MOD_EXPLODE').action = 'EXTRACT_FACES'
+            pie.operator("mesh.poke", text="Poke Face", icon='VERTEXSEL')
+            pie.operator("mesh.inset", text="Inset / Wedge Face", icon='FACESEL')
+            pie.menu("MAYA_STYLE_MT_normals", text="Face Normals", icon='NORMALS_FACE')
+        elif sel_mode[1]:
+            # Edge Mode (matches contextPolyToolsEdgeMM.mel)
+            pie.operator("mesh.knife_tool", text="Multi-Cut / Knife", icon='MOD_TRIANGULATE')
+            pie.operator("mesh.bevel", text="Bevel Edge", icon='MOD_BEVEL')
+            pie.operator("mesh.extrude_region_move", text="Extrude Edge  Ctrl+E", icon='MOD_SOLIDIFY')
+            pie.operator("mesh.bridge_edge_loops", text="Bridge Edges", icon='EDGESEL')
+            pie.operator("mesh.loopcut_slide", text="Insert Edge Loop", icon='MOD_EDGESPLIT')
+            pie.operator("maya_style.poly_action", text="Fill Hole", icon='FACESEL').action = 'FILL_HOLE'
+            pie.operator("maya_style.poly_action", text="Delete Edge/Vertex", icon='X').action = 'DELETE_EDGE_VERTEX'
+            pie.menu("MAYA_STYLE_MT_normals", text="Soften / Harden Edge", icon='NORMALS_FACE')
+        else:
+            # Vertex Mode (matches contextPolyToolsVertexMM.mel)
+            pie.operator("mesh.knife_tool", text="Multi-Cut / Knife", icon='MOD_TRIANGULATE')
+            op = pie.operator("mesh.bevel", text="Chamfer Vertex", icon='MOD_BEVEL')
+            op.affect = 'VERTICES'
+            pie.operator("mesh.extrude_verts_indiv", text="Extrude Vertex", icon='VERTEXSEL')
+            pie.operator("mesh.merge", text="Merge to Center", icon='AUTOMERGE_ON').type = 'CENTER'
+            pie.operator("mesh.vert_connect_path", text="Connect Vertices", icon='EDGESEL')
+            pie.operator("mesh.vertices_smooth", text="Average Vertices", icon='SMOOTHCURVE')
+            pie.operator("mesh.dissolve_verts", text="Delete Vertex", icon='X')
+            pie.operator("mesh.remove_doubles", text="Merge by Distance", icon='AUTOMERGE_ON')
+
+
+class MAYA_STYLE_MT_convert_selection(bpy.types.Menu):
+    """Ctrl+RMB Selection Conversion Marking Menu."""
+    bl_label = "Convert Selection Marking Menu"
+    bl_idname = "MAYA_STYLE_MT_convert_selection"
+
+    def draw(self, context):
+        pie = self.layout.menu_pie()
+        pie.operator("maya_style.poly_action", text="To Vertices", icon='VERTEXSEL').action = 'CONVERT_TO_VERTICES'
+        pie.operator("mesh.loop_multi_select", text="To Edge Loop", icon='EDGESEL').ring = False
+        pie.operator("maya_style.poly_action", text="To Faces", icon='FACESEL').action = 'CONVERT_TO_FACES'
+        pie.operator("maya_style.poly_action", text="To Edges", icon='EDGESEL').action = 'CONVERT_TO_EDGES'
+        pie.operator("mesh.select_linked", text="To UV / Mesh Shell", icon='UV_ISLANDSEL')
+        pie.operator("mesh.loop_multi_select", text="To Edge Ring", icon='EDGESEL').ring = True
+        pie.operator("mesh.select_less", text="Shrink Selection  <", icon='REMOVE')
+        pie.operator("mesh.select_more", text="Grow Selection  >", icon='ADD')
 
 
 class MAYA_STYLE_MT_hotbox(bpy.types.Menu):
     bl_label = "Baya 3D Hotbox"
+
     def draw(self, context):
         pie = self.layout.menu_pie()
-        pie.menu("VIEW3D_MT_view", text="View")
-        pie.menu("VIEW3D_MT_add", text="Create")
-        pie.operator("screen.region_quadview", text="Single / Four Views")
-        pie.operator("wm.call_menu_pie", text="Selection").name = "MAYA_STYLE_MT_components"
+        pie.menu("MAYA_STYLE_MT_display", text="Display / View")
+        pie.menu("MAYA_STYLE_MT_shelf_create", text="Create")
+        pie.operator("screen.region_quadview", text="Single / Four Views  Space")
+        pie.operator("wm.call_menu_pie", text="Selection  RMB").name = "MAYA_STYLE_MT_components"
         pie.menu("TOPBAR_MT_file", text="File")
-        pie.menu("TOPBAR_MT_edit", text="Edit")
-        pie.menu("VIEW3D_MT_edit_mesh" if context.mode == 'EDIT_MESH' else "VIEW3D_MT_object", text="Mesh / Object")
-        pie.operator("wm.search_menu", text="Search Commands", icon='VIEWZOOM')
+        pie.menu("MAYA_STYLE_MT_modify", text="Modify")
+        pie.menu("MAYA_STYLE_MT_mesh", text="Mesh / Edit Mesh")
+        pie.menu("MAYA_STYLE_MT_windows", text="Windows / Menu Sets")
 
 
 class MAYA_STYLE_OT_hotbox(bpy.types.Operator):
@@ -333,19 +1135,32 @@ class MAYA_STYLE_OT_hotbox(bpy.types.Operator):
     bl_description = "Tap Space to toggle four views; hold Space for the hotbox pie menu"
     _timer = None
     _started = 0.0
+    _opened_pie = False
 
     @classmethod
     def poll(cls, context):
         return _view_poll(context)
 
     def _cleanup(self, context):
+        global _hotbox_active
+        _hotbox_active = False
         if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
             self._timer = None
+        if context.workspace:
+            context.workspace.status_text_set(None)
 
     def invoke(self, context, event):
+        global _hotbox_active
+        if _hotbox_active or getattr(event, "is_repeat", False):
+            return {'CANCELLED'}
+        _hotbox_active = True
+        self._opened_pie = False
         self._started = time.monotonic()
-        self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
+        self._timer = context.window_manager.event_timer_add(0.04, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
@@ -354,9 +1169,13 @@ class MAYA_STYLE_OT_hotbox(bpy.types.Operator):
             self._cleanup(context)
             return {'CANCELLED'}
         if event.type == 'SPACE' and event.value == 'RELEASE':
+            opened = self._opened_pie
             self._cleanup(context)
-            return bpy.ops.screen.region_quadview()
-        if event.type == 'TIMER' and time.monotonic() - self._started >= 0.22:
+            if not opened:
+                return bpy.ops.screen.region_quadview()
+            return {'FINISHED'}
+        if event.type == 'TIMER' and not self._opened_pie and time.monotonic() - self._started >= 0.20:
+            self._opened_pie = True
             self._cleanup(context)
             bpy.ops.wm.call_menu_pie('INVOKE_DEFAULT', name="MAYA_STYLE_MT_hotbox")
             return {'FINISHED'}
@@ -422,7 +1241,11 @@ def keyconfig_data():
     # competing number bindings explicitly, rather than relying on addon order.
     view_maps = {'3D View', '3D View Generic', 'Object Mode', 'Object Non-modal', 'Mesh', 'Pose'}
     numbers = {'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN'}
-    plain_reserved = numbers | {'F2', 'F3', 'F4', 'F5', 'F6', 'F8', 'F9', 'F10', 'F11', 'F12', 'Y', 'K', 'SPACE', 'PAGE_UP', 'PAGE_DOWN'}
+    plain_reserved = numbers | {
+        'F2', 'F3', 'F4', 'F5', 'F6', 'F8', 'F9', 'F10', 'F11', 'F12',
+        'Y', 'G', 'K', 'B', 'D', 'INSERT', 'X', 'C', 'V', 'P',
+        'SPACE', 'PAGE_UP', 'PAGE_DOWN',
+    }
     for name, args, payload in data:
         result = []
         for op, event, props in payload['items']:
@@ -434,9 +1257,13 @@ def keyconfig_data():
                 continue
             if name == 'Object Mode' and key == 'D' and event.get('ctrl') and not event.get('shift') and not event.get('alt'):
                 continue
+            if name in view_maps and key == 'G' and event.get('ctrl') and not event.get('shift') and not event.get('alt'):
+                continue
             if name in {'Object Mode', 'Mesh'} and key == 'RIGHTMOUSE' and plain:
                 continue
-            if name == '3D View' and key == 'RIGHTMOUSE' and event.get('shift') and not event.get('alt') and not event.get('ctrl'):
+            if name in {'3D View', 'Object Mode', 'Mesh'} and key == 'RIGHTMOUSE' and event.get('shift') and not event.get('alt') and not event.get('ctrl'):
+                continue
+            if name in {'3D View', 'Object Mode', 'Mesh'} and key == 'RIGHTMOUSE' and event.get('ctrl') and not event.get('alt') and not event.get('shift'):
                 continue
             if name in view_maps and key == 'E' and event.get('ctrl') and not event.get('alt') and not event.get('shift'):
                 continue
@@ -460,23 +1287,42 @@ def keyconfig_data():
         maps['3D View'].append(_item('maya_style.preview_divisions', key, {'delta': delta}, repeat=True))
     for key, mode in [('FOUR', 'WIREFRAME'), ('FIVE', 'SOLID'), ('SIX', 'MATERIAL'), ('SEVEN', 'RENDERED')]:
         maps['3D View'].append(_item('maya_style.shading', key, {'mode': mode}))
+    maps['3D View'].append(_item('maya_style.shading', 'FIVE', {'mode': 'WIRE_ON_SHADED'}, alt=True))
     for key, mode in [('F8', 'TOGGLE'), ('F9', 'VERT'), ('F10', 'EDGE'), ('F11', 'FACE'), ('F12', 'UV')]:
         maps['3D View'].append(_item('maya_style.component', key, {'mode': mode}))
     for key, shelf in [('F2', 'MODEL'), ('F3', 'RIG'), ('F4', 'ANIM'), ('F5', 'FX'), ('F6', 'RENDER')]:
         maps['3D View'].append(_item('maya_style.shelf', key, {'name': shelf}))
+    for key, snap_mode in [('X', 'INCREMENT'), ('C', 'EDGE'), ('V', 'VERTEX')]:
+        maps['3D View'].append(_item('maya_style.snap_hold', key, {'mode': snap_mode, 'toggle': False}))
     maps['3D View'].extend([
         _item('maya_style.last_tool', 'Y'),
+        _item('screen.repeat_last', 'G'),
+        _item('maya_style.poly_action', 'B', {'action': 'SOFT_SELECT_TOGGLE'}),
+        _item('maya_style.pivot_mode', 'D', {'action': 'TOGGLE'}),
+        _item('maya_style.pivot_mode', 'INSERT', {'action': 'TOGGLE'}),
+        _item('maya_style.poly_action', 'G', {'action': 'GROUP'}, ctrl=True),
         _item('maya_style.hotbox', 'SPACE'),
         _item('maya_style.scrub', 'K'),
         _item('maya_style.channel_toggle', 'A', ctrl=True),
         _item('wm.call_menu_pie', 'RIGHTMOUSE', {'name': 'MAYA_STYLE_MT_components'}),
-        _item('wm.call_menu_pie', 'RIGHTMOUSE', {'name': 'MAYA_STYLE_MT_create'}, shift=True),
+        _item('wm.call_menu_pie', 'RIGHTMOUSE', {'name': 'MAYA_STYLE_MT_context_tools'}, shift=True),
+        _item('wm.call_menu_pie', 'RIGHTMOUSE', {'name': 'MAYA_STYLE_MT_convert_selection'}, ctrl=True),
     ])
-    maps['Object Mode'].append(_item('maya_style.duplicate', 'D', ctrl=True))
+    maps['Object Mode'].extend([
+        _item('maya_style.duplicate', 'D', ctrl=True),
+        _item('object.parent_set', 'P', {'type': 'OBJECT'}),
+        _item('object.parent_clear', 'P', {'type': 'CLEAR_KEEP_TRANSFORM'}, shift=True),
+    ])
     for name, operator in [('Object Mode', 'object.select_all'), ('Mesh', 'mesh.select_all'), ('Pose', 'pose.select_all')]:
         maps[name].append(_item(operator, 'A', {'action': 'SELECT'}, ctrl=True, shift=True))
         maps[name].append(_item(operator, 'I', {'action': 'INVERT'}, ctrl=True, shift=True))
-    maps['Mesh'].append(_item('mesh.extrude_region_move', 'E', ctrl=True))
+    maps['Mesh'].extend([
+        _item('mesh.extrude_region_move', 'E', ctrl=True),
+        _item('mesh.bevel', 'B', ctrl=True),
+        _item('maya_style.duplicate', 'D', ctrl=True),
+        _item('maya_style.poly_action', 'DEL', {'action': 'DELETE_EDGE_VERTEX'}, ctrl=True),
+        _item('maya_style.poly_action', 'BACK_SPACE', {'action': 'DELETE_EDGE_VERTEX'}, ctrl=True),
+    ])
     maps['Frames'].extend([
         _item('screen.animation_play', 'V', alt=True),
         _item('screen.frame_offset', 'COMMA', {'delta': -1}, alt=True, repeat=True),
@@ -595,11 +1441,28 @@ def _repair_keyconfig_after_load(_dummy):
 
 
 _classes = (
-    MAYA_STYLE_OT_tool, MAYA_STYLE_OT_last_tool, MAYA_STYLE_OT_smooth_preview,
+    MAYA_STYLE_OT_tool,
+    MAYA_STYLE_OT_last_tool,
+    MAYA_STYLE_OT_smooth_preview,
     MAYA_STYLE_OT_preview_divisions,
-    MAYA_STYLE_OT_shading, MAYA_STYLE_OT_component, MAYA_STYLE_OT_uv_mode,
-    MAYA_STYLE_OT_duplicate, MAYA_STYLE_MT_components, MAYA_STYLE_MT_create,
-    MAYA_STYLE_MT_hotbox, MAYA_STYLE_OT_hotbox, MAYA_STYLE_OT_scrub,
+    MAYA_STYLE_OT_shading,
+    MAYA_STYLE_OT_component,
+    MAYA_STYLE_OT_uv_mode,
+    MAYA_STYLE_OT_duplicate,
+    MAYA_STYLE_OT_snap_hold,
+    MAYA_STYLE_OT_pivot_mode,
+    MAYA_STYLE_OT_poly_action,
+    MAYA_STYLE_OT_assign_shader,
+    MAYA_STYLE_OT_command_exec,
+    MAYA_STYLE_MT_assign_material,
+    MAYA_STYLE_MT_normals,
+    MAYA_STYLE_MT_components,
+    MAYA_STYLE_MT_create,
+    MAYA_STYLE_MT_context_tools,
+    MAYA_STYLE_MT_convert_selection,
+    MAYA_STYLE_MT_hotbox,
+    MAYA_STYLE_OT_hotbox,
+    MAYA_STYLE_OT_scrub,
 )
 
 
@@ -615,6 +1478,9 @@ def register():
 
 
 def unregister():
+    global _hotbox_active, _snap_hold_active
+    _hotbox_active = False
+    _snap_hold_active = False
     if bpy.app.timers.is_registered(_watch_tools):
         bpy.app.timers.unregister(_watch_tools)
     if bpy.app.timers.is_registered(_repair_keyconfig_deferred):
